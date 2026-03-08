@@ -1,8 +1,10 @@
 "use client";
 
+import { getCursor, getCursorPosition } from "@automerge/automerge";
+import type { Cursor } from "@automerge/automerge";
 import { useDocument, useDocuments, useRepo } from "@automerge/automerge-repo-react-hooks";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { DocumentIndexDoc, MarkdownDoc } from "@/lib/types";
 
@@ -88,10 +90,21 @@ function avatarFallback(name: string, email: string): string {
   return source.slice(0, 1).toUpperCase();
 }
 
+function toLineAndColumn(text: string, index: number): string {
+  const clamped = Math.max(0, Math.min(index, text.length));
+  const prefix = text.slice(0, clamped);
+  const line = prefix.split("\n").length;
+  const lastBreak = prefix.lastIndexOf("\n");
+  const column = clamped - (lastBreak + 1) + 1;
+  return `L${line}:C${column}`;
+}
+
 export function EditorShell({ user }: EditorShellProps) {
   const repo = useRepo();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
   const docParam = searchParams.get("doc");
   const activeDocUrl = (docParam ?? undefined) as AutomergeUrl | undefined;
   const indexParam = searchParams.get("index");
@@ -177,6 +190,94 @@ export function EditorShell({ user }: EditorShellProps) {
     router.push(`/editor?index=${encodeURIComponent(indexUrl ?? "")}&doc=${encodeURIComponent(url)}`);
   };
 
+  const updateLocalSelection = useCallback(
+    (start: number, end: number) => {
+      if (!activeDoc) {
+        return;
+      }
+
+      changeActiveDoc((doc) => {
+        if (typeof doc.content !== "string") {
+          doc.content = "";
+        }
+        if (!doc.cursors) {
+          doc.cursors = {};
+        }
+
+        const startCursor = getCursor(doc, ["content"], start, "after");
+        const endCursor = getCursor(doc, ["content"], end, "after");
+        const existing = doc.cursors[user.id];
+        if (
+          existing?.cursor === startCursor &&
+          existing.selectionCursor === endCursor &&
+          existing.displayName === user.name
+        ) {
+          return;
+        }
+
+        doc.cursors[user.id] = {
+          userId: user.id,
+          displayName: user.name,
+          cursor: startCursor,
+          selectionCursor: endCursor,
+          updatedAt: Date.now(),
+        };
+      });
+    },
+    [activeDoc, changeActiveDoc, user.id, user.name],
+  );
+
+  const captureTextareaSelection = useCallback(() => {
+    const element = textareaRef.current;
+    if (!element) {
+      return;
+    }
+    updateLocalSelection(element.selectionStart ?? 0, element.selectionEnd ?? 0);
+  }, [updateLocalSelection]);
+
+  useEffect(() => {
+    if (!activeDoc) {
+      return;
+    }
+    const element = textareaRef.current;
+    if (!element) {
+      updateLocalSelection(0, 0);
+      return;
+    }
+    updateLocalSelection(element.selectionStart ?? 0, element.selectionEnd ?? 0);
+  }, [activeDoc, activeDocUrl, updateLocalSelection]);
+
+  const collaboratorCursors = useMemo(() => {
+    if (!activeDoc?.cursors) {
+      return [];
+    }
+
+    return Object.values(activeDoc.cursors)
+      .filter((entry) => entry.userId !== user.id)
+      .map((entry) => {
+        let startIndex = 0;
+        let endIndex = 0;
+        try {
+          startIndex = getCursorPosition(activeDoc, ["content"], entry.cursor as Cursor);
+          endIndex = getCursorPosition(
+            activeDoc,
+            ["content"],
+            (entry.selectionCursor ?? entry.cursor) as Cursor,
+          );
+        } catch {
+          startIndex = 0;
+          endIndex = 0;
+        }
+
+        return {
+          ...entry,
+          startIndex,
+          endIndex,
+        };
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [activeDoc, user.id]);
+
   return (
     <div className="flex min-h-screen bg-background text-foreground">
       <aside className="w-80 border-r border-black/10 bg-black/[0.03] p-4">
@@ -251,13 +352,58 @@ export function EditorShell({ user }: EditorShellProps) {
               className="w-full rounded-lg border border-black/15 bg-white px-4 py-3 text-2xl font-semibold outline-none focus:border-black/40"
               placeholder="Document title"
             />
+
+            {collaboratorCursors.length > 0 ? (
+              <div className="rounded-lg border border-black/10 bg-white p-3 text-xs">
+                <p className="mb-2 font-semibold text-black/70">Collaborators</p>
+                <div className="space-y-1">
+                  {collaboratorCursors.map((entry) => (
+                    <p key={entry.userId} className="truncate text-black/70">
+                      {entry.displayName} at{" "}
+                      {toLineAndColumn(activeDoc.content ?? "", entry.startIndex)}
+                      {entry.startIndex !== entry.endIndex
+                        ? ` - ${toLineAndColumn(activeDoc.content ?? "", entry.endIndex)}`
+                        : ""}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             <textarea
+              ref={textareaRef}
               value={activeDoc.content}
               onChange={(event) =>
                 changeActiveDoc((doc) => {
                   doc.content = event.target.value;
+                  if (!doc.cursors) {
+                    doc.cursors = {};
+                  }
+                  const startCursor = getCursor(
+                    doc,
+                    ["content"],
+                    event.target.selectionStart ?? 0,
+                    "after",
+                  );
+                  const endCursor = getCursor(
+                    doc,
+                    ["content"],
+                    event.target.selectionEnd ?? 0,
+                    "after",
+                  );
+                  doc.cursors[user.id] = {
+                    userId: user.id,
+                    displayName: user.name,
+                    cursor: startCursor,
+                    selectionCursor: endCursor,
+                    updatedAt: Date.now(),
+                  };
                 })
               }
+              onSelect={captureTextareaSelection}
+              onKeyUp={captureTextareaSelection}
+              onClick={captureTextareaSelection}
+              onFocus={captureTextareaSelection}
               className="h-[70vh] w-full resize-y rounded-lg border border-black/15 bg-white p-4 font-mono text-sm outline-none focus:border-black/40"
               placeholder="Write markdown..."
             />

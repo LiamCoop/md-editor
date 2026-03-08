@@ -1,0 +1,29 @@
+services:
+  sync-server:
+    image: ghcr.io/automerge/automerge-repo-sync-server:main
+    ports:
+      - "3030:3030"
+    volumes:
+      - sync-data:/data
+    environment:
+      - PORT=3030
+      - DATA_DIR=/data
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_SYNC_SERVER_URL=ws://localhost:3030
+      - AZURE_AD_CLIENT_ID=${AZURE_AD_CLIENT_ID}
+      - AZURE_AD_CLIENT_SECRET=${AZURE_AD_CLIENT_SECRET}
+      - AZURE_AD_TENANT_ID=${AZURE_AD_TENANT_ID}
+      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+    depends_on:
+      - sync-server
+
+volumes:
+  sync-data:

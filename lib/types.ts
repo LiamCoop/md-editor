@@ -27,8 +27,10 @@ export interface CursorPosition {
   /** next-auth user id */
   userId: string;
   displayName: string;
-  /** Character offset in the text */
-  offset: number;
+  /** Stable Automerge cursor for selection start */
+  cursor: string;
+  /** Optional stable Automerge cursor for selection end */
+  selectionCursor?: string;
   updatedAt: number;
 }
 
