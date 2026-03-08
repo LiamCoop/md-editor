@@ -9,7 +9,20 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@automerge/automerge": "^3.2.4",
+    "@automerge/automerge-codemirror": "^0.1.0",
+    "@automerge/automerge-repo": "^2.5.3",
+    "@automerge/automerge-repo-network-broadcastchannel": "^2.5.3",
+    "@automerge/automerge-repo-network-websocket": "^2.5.3",
+    "@automerge/automerge-repo-react-hooks": "^2.5.3",
+    "@automerge/automerge-repo-storage-indexeddb": "^2.5.3",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.2",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/view": "^6.39.16",
     "next": "16.1.6",
+    "next-auth": "^4.24.13",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },
