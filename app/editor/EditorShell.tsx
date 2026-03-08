@@ -4,6 +4,9 @@ import { getCursor, getCursorPosition } from "@automerge/automerge";
 import type { Cursor } from "@automerge/automerge";
 import { useDocument, useDocuments, useRepo } from "@automerge/automerge-repo-react-hooks";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
+import { EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+import { markdown } from "@codemirror/lang-markdown";
+import { Decoration, EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { DocumentIndexDoc, MarkdownDoc } from "@/lib/types";
@@ -82,6 +85,54 @@ interface PendingComment {
   body: string;
 }
 
+const setCommentHighlightsEffect = StateEffect.define<readonly { from: number; to: number }[]>();
+
+const commentHighlightsField = StateField.define({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, transaction) {
+    let next = decorations.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (!effect.is(setCommentHighlightsEffect)) {
+        continue;
+      }
+      const builder = new RangeSetBuilder<Decoration>();
+      for (const range of effect.value) {
+        if (range.to <= range.from) {
+          continue;
+        }
+        builder.add(range.from, range.to, Decoration.mark({ class: "cm-comment-highlight" }));
+      }
+      next = builder.finish();
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+const editorTheme = EditorView.theme({
+  "&": {
+    height: "70vh",
+  },
+  "&.cm-editor": {
+    outline: "none",
+  },
+  ".cm-scroller": {
+    fontFamily: "var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: "0.875rem",
+  },
+  ".cm-content": {
+    padding: "1rem",
+  },
+  ".cm-focused": {
+    outline: "none",
+  },
+  ".cm-comment-highlight": {
+    backgroundColor: "#f6e8b1",
+  },
+});
+
 function randomInt(max: number): number {
   const bytes = new Uint32Array(1);
   crypto.getRandomValues(bytes);
@@ -117,12 +168,17 @@ export function EditorShell({ user }: EditorShellProps) {
   const repo = useRepo();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorHostRef = useRef<HTMLDivElement | null>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
   const [selectionRange, setSelectionRange] = useState({ start: 0, end: 0 });
   const [pendingComment, setPendingComment] = useState<PendingComment | null>(null);
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
   const [replyingToCommentId, setReplyingToCommentId] = useState<string | null>(null);
   const [replyDraft, setReplyDraft] = useState("");
+  const [commentHighlightRange, setCommentHighlightRange] = useState<{
+    start: number;
+    end: number;
+  } | null>(null);
 
   const docParam = searchParams.get("doc");
   const activeDocUrl = (docParam ?? undefined) as AutomergeUrl | undefined;
@@ -165,6 +221,13 @@ export function EditorShell({ user }: EditorShellProps) {
   const [activeDoc, changeActiveDoc] = useDocument<MarkdownDoc>(activeDocUrl, {
     suspense: false,
   });
+  const hasActiveDoc = Boolean(activeDoc);
+  const activeDocContent = activeDoc?.content ?? "";
+  const activeDocContentRef = useRef(activeDocContent);
+
+  useEffect(() => {
+    activeDocContentRef.current = activeDocContent;
+  }, [activeDocContent]);
 
   useEffect(() => {
     if (!indexDoc || activeDocUrl) {
@@ -211,7 +274,7 @@ export function EditorShell({ user }: EditorShellProps) {
 
   const updateLocalSelection = useCallback(
     (start: number, end: number) => {
-      if (!activeDoc) {
+      if (!activeDocUrl) {
         return;
       }
 
@@ -243,54 +306,97 @@ export function EditorShell({ user }: EditorShellProps) {
         };
       });
     },
-    [activeDoc, changeActiveDoc, user.id, user.name],
+    [activeDocUrl, changeActiveDoc, user.id, user.name],
   );
 
-  const captureTextareaSelection = useCallback(() => {
-    const element = textareaRef.current;
-    if (!element) {
+  useEffect(() => {
+    if (!hasActiveDoc || !activeDocUrl || !editorHostRef.current) {
       return;
     }
-    const start = element.selectionStart ?? 0;
-    const end = element.selectionEnd ?? 0;
-    setSelectionRange({ start, end });
-    updateLocalSelection(start, end);
-  }, [updateLocalSelection]);
 
-  useEffect(() => {
-    const handleSelectionChange = () => {
-      const element = textareaRef.current;
-      if (!element) {
-        return;
-      }
-      if (document.activeElement !== element) {
-        return;
-      }
-      const start = element.selectionStart ?? 0;
-      const end = element.selectionEnd ?? 0;
-      setSelectionRange({ start, end });
-      updateLocalSelection(start, end);
-    };
+    const initialDoc = activeDocContentRef.current;
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: initialDoc,
+        extensions: [
+          markdown(),
+          commentHighlightsField,
+          editorTheme,
+          EditorView.lineWrapping,
+          EditorView.updateListener.of((update) => {
+            const { from, to } = update.state.selection.main;
 
-    document.addEventListener("selectionchange", handleSelectionChange);
+            if (update.docChanged) {
+              const content = update.state.doc.toString();
+              setSelectionRange({ start: from, end: to });
+              changeActiveDoc((doc) => {
+                doc.content = content;
+                if (!doc.cursors) {
+                  doc.cursors = {};
+                }
+                const startCursor = getCursor(doc, ["content"], from, "after");
+                const endCursor = getCursor(doc, ["content"], to, "after");
+                doc.cursors[user.id] = {
+                  userId: user.id,
+                  displayName: user.name,
+                  cursor: startCursor,
+                  selectionCursor: endCursor,
+                  updatedAt: Date.now(),
+                };
+              });
+              return;
+            }
+
+            if (update.selectionSet) {
+              setSelectionRange({ start: from, end: to });
+              updateLocalSelection(from, to);
+            }
+          }),
+        ],
+      }),
+      parent: editorHostRef.current,
+    });
+
+    editorViewRef.current = view;
+    const initialSelection = view.state.selection.main;
+    setSelectionRange({ start: initialSelection.from, end: initialSelection.to });
+    updateLocalSelection(initialSelection.from, initialSelection.to);
+
     return () => {
-      document.removeEventListener("selectionchange", handleSelectionChange);
+      view.destroy();
+      if (editorViewRef.current === view) {
+        editorViewRef.current = null;
+      }
     };
-  }, [updateLocalSelection]);
+  }, [
+    activeDocUrl,
+    hasActiveDoc,
+    changeActiveDoc,
+    updateLocalSelection,
+    user.id,
+    user.name,
+  ]);
 
   useEffect(() => {
-    if (!activeDoc) {
+    const view = editorViewRef.current;
+    if (!view || !hasActiveDoc) {
       return;
     }
-    const element = textareaRef.current;
-    if (!element) {
-      updateLocalSelection(0, 0);
+    const current = view.state.doc.toString();
+    const next = activeDocContent;
+    if (current === next) {
       return;
     }
-    const start = element.selectionStart ?? 0;
-    const end = element.selectionEnd ?? 0;
-    updateLocalSelection(start, end);
-  }, [activeDoc, activeDocUrl, updateLocalSelection]);
+
+    const selection = view.state.selection.main;
+    view.dispatch({
+      changes: { from: 0, to: current.length, insert: next },
+      selection: {
+        anchor: Math.min(selection.anchor, next.length),
+        head: Math.min(selection.head, next.length),
+      },
+    });
+  }, [activeDocContent, activeDocUrl, hasActiveDoc]);
 
   const orderedSelection = useMemo(() => {
     const start = Math.min(selectionRange.start, selectionRange.end);
@@ -299,7 +405,7 @@ export function EditorShell({ user }: EditorShellProps) {
   }, [selectionRange.end, selectionRange.start]);
 
   const selectedText = useMemo(() => {
-    const sourceText = activeDoc?.content ?? "";
+    const sourceText = activeDocContent;
     if (!sourceText) {
       return "";
     }
@@ -307,7 +413,7 @@ export function EditorShell({ user }: EditorShellProps) {
       return "";
     }
     return sourceText.slice(orderedSelection.start, orderedSelection.end);
-  }, [activeDoc?.content, orderedSelection.end, orderedSelection.start]);
+  }, [activeDocContent, orderedSelection.end, orderedSelection.start]);
 
   const hasSelection = orderedSelection.end > orderedSelection.start;
   const comments = activeDoc?.comments ?? [];
@@ -316,20 +422,39 @@ export function EditorShell({ user }: EditorShellProps) {
 
   const highlightRange = useCallback(
     (start: number, end: number) => {
-      const element = textareaRef.current;
-      if (!element) {
+      const view = editorViewRef.current;
+      if (!view) {
         return;
       }
       const from = Math.max(0, Math.min(start, end));
       const to = Math.max(0, Math.max(start, end));
-      element.focus();
-      element.selectionStart = from;
-      element.selectionEnd = to;
-      setSelectionRange({ start: from, end: to });
-      updateLocalSelection(from, to);
+      const docLength = view.state.doc.length;
+      setCommentHighlightRange({
+        start: Math.min(from, docLength),
+        end: Math.min(to, docLength),
+      });
     },
-    [updateLocalSelection],
+    [],
   );
+
+  useEffect(() => {
+    const view = editorViewRef.current;
+    if (!view) {
+      return;
+    }
+    if (!commentHighlightRange) {
+      view.dispatch({
+        effects: setCommentHighlightsEffect.of([]),
+      });
+      return;
+    }
+    const docLength = view.state.doc.length;
+    const from = Math.max(0, Math.min(commentHighlightRange.start, docLength));
+    const to = Math.max(from, Math.min(commentHighlightRange.end, docLength));
+    view.dispatch({
+      effects: setCommentHighlightsEffect.of([{ from, to }]),
+    });
+  }, [commentHighlightRange, activeDocUrl]);
 
   const openPendingComment = () => {
     if (!hasSelection || !selectedText.trim()) {
@@ -574,43 +699,9 @@ export function EditorShell({ user }: EditorShellProps) {
                       </div>
                     ) : null}
 
-                    <textarea
-                      ref={textareaRef}
-                      value={activeDoc.content}
-                      onChange={(event) =>
-                        changeActiveDoc((doc) => {
-                          doc.content = event.target.value;
-                          if (!doc.cursors) {
-                            doc.cursors = {};
-                          }
-                          const startCursor = getCursor(
-                            doc,
-                            ["content"],
-                            event.target.selectionStart ?? 0,
-                            "after",
-                          );
-                          const endCursor = getCursor(
-                            doc,
-                            ["content"],
-                            event.target.selectionEnd ?? 0,
-                            "after",
-                          );
-                          doc.cursors[user.id] = {
-                            userId: user.id,
-                            displayName: user.name,
-                            cursor: startCursor,
-                            selectionCursor: endCursor,
-                            updatedAt: Date.now(),
-                          };
-                        })
-                      }
-                      onSelect={captureTextareaSelection}
-                      onMouseUp={captureTextareaSelection}
-                      onTouchEnd={captureTextareaSelection}
-                      onKeyUp={captureTextareaSelection}
-                      onFocus={captureTextareaSelection}
-                      className="h-[70vh] w-full resize-y rounded-lg border border-black/15 bg-white p-4 font-mono text-sm outline-none selection:bg-[#f6e8b1] selection:text-black focus:border-black/40"
-                      placeholder="Write markdown..."
+                    <div
+                      ref={editorHostRef}
+                      className="h-[70vh] w-full rounded-lg border border-black/15 bg-white"
                     />
                   </div>
                 </div>
@@ -698,9 +789,10 @@ export function EditorShell({ user }: EditorShellProps) {
                               highlightRange(comment.anchorStart, comment.anchorEnd);
                             }}
                             onMouseLeave={() => {
-                              setHoveredCommentId((current) =>
-                                current === comment.id ? null : current,
-                              );
+                              if (hoveredCommentId === comment.id) {
+                                setHoveredCommentId(null);
+                                setCommentHighlightRange(null);
+                              }
                             }}
                             className={`group rounded-2xl p-4 transition ${
                               isHovered
