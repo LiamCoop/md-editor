@@ -175,6 +175,8 @@ export function EditorShell({ user }: EditorShellProps) {
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
   const [replyingToCommentId, setReplyingToCommentId] = useState<string | null>(null);
   const [replyDraft, setReplyDraft] = useState("");
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentDraft, setEditingCommentDraft] = useState("");
   const [commentHighlightRange, setCommentHighlightRange] = useState<{
     start: number;
     end: number;
@@ -553,6 +555,78 @@ export function EditorShell({ user }: EditorShellProps) {
     }
   };
 
+  const startEditingComment = (commentId: string, currentBody: string, authorId: string) => {
+    if (authorId !== user.id) {
+      return;
+    }
+    setEditingCommentId(commentId);
+    setEditingCommentDraft(currentBody);
+  };
+
+  const cancelEditingComment = () => {
+    setEditingCommentId(null);
+    setEditingCommentDraft("");
+  };
+
+  const saveEditedComment = (commentId: string) => {
+    const body = editingCommentDraft.trim();
+    if (!activeDoc || !body) {
+      return;
+    }
+
+    changeActiveDoc((doc) => {
+      if (!doc.comments) {
+        return;
+      }
+      const comment = doc.comments.find((entry) => entry.id === commentId);
+      if (!comment || comment.authorId !== user.id) {
+        return;
+      }
+      comment.body = body;
+    });
+
+    setEditingCommentId(null);
+    setEditingCommentDraft("");
+  };
+
+  const deleteComment = (commentId: string, authorId: string) => {
+    if (authorId !== user.id) {
+      return;
+    }
+
+    const shouldDelete = window.confirm("Delete this comment thread?");
+    if (!shouldDelete) {
+      return;
+    }
+
+    changeActiveDoc((doc) => {
+      if (!doc.comments) {
+        return;
+      }
+      const index = doc.comments.findIndex((entry) => entry.id === commentId);
+      if (index < 0) {
+        return;
+      }
+      if (doc.comments[index].authorId !== user.id) {
+        return;
+      }
+      doc.comments.splice(index, 1);
+    });
+
+    if (hoveredCommentId === commentId) {
+      setHoveredCommentId(null);
+      setCommentHighlightRange(null);
+    }
+    if (replyingToCommentId === commentId) {
+      setReplyingToCommentId(null);
+      setReplyDraft("");
+    }
+    if (editingCommentId === commentId) {
+      setEditingCommentId(null);
+      setEditingCommentDraft("");
+    }
+  };
+
   const collaboratorCursors = useMemo(() => {
     if (!activeDoc?.cursors) {
       return [];
@@ -781,6 +855,8 @@ export function EditorShell({ user }: EditorShellProps) {
                       .map((comment) => {
                         const isHovered = hoveredCommentId === comment.id;
                         const isResolved = Boolean(comment.resolved);
+                        const isOwner = comment.authorId === user.id;
+                        const isEditing = editingCommentId === comment.id;
                         return (
                           <article
                             key={comment.id}
@@ -838,11 +914,41 @@ export function EditorShell({ user }: EditorShellProps) {
                                 </button>
                               </div>
                             </div>
-                            <div className={`mt-2 rounded-xl px-3 py-2 ${isHovered ? "bg-[#c9d1df]" : ""}`}>
-                              <p className="whitespace-pre-wrap text-base leading-6 text-black/70">
-                                {comment.body}
-                              </p>
-                            </div>
+                            {isEditing ? (
+                              <div className="mt-2 rounded-xl bg-white/70 p-2.5">
+                                <textarea
+                                  value={editingCommentDraft}
+                                  onChange={(event) =>
+                                    setEditingCommentDraft(event.target.value)
+                                  }
+                                  className="h-16 w-full resize-y rounded-xl border border-[#1a73e8] bg-white px-3 py-2 text-sm outline-none focus:border-[#1a73e8]"
+                                  placeholder="Edit your comment..."
+                                />
+                                <div className="mt-2 flex items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={cancelEditingComment}
+                                    className="rounded-full px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => saveEditedComment(comment.id)}
+                                    disabled={!editingCommentDraft.trim()}
+                                    className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                                  >
+                                    Save
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className={`mt-2 rounded-xl px-3 py-2 ${isHovered ? "bg-[#c9d1df]" : ""}`}>
+                                <p className="whitespace-pre-wrap text-base leading-6 text-black/70">
+                                  {comment.body}
+                                </p>
+                              </div>
+                            )}
                             <div className="mt-2 flex items-center gap-2">
                               <button
                                 type="button"
@@ -851,13 +957,33 @@ export function EditorShell({ user }: EditorShellProps) {
                               >
                                 {isResolved ? "Re-open" : "Resolve"}
                               </button>
+                              {isOwner ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    startEditingComment(comment.id, comment.body, comment.authorId)
+                                  }
+                                  className="rounded-full border border-black/20 bg-white px-3 py-1.5 text-sm font-medium text-black/75 transition hover:bg-black/5"
+                                >
+                                  Edit
+                                </button>
+                              ) : null}
+                              {isOwner ? (
+                                <button
+                                  type="button"
+                                  onClick={() => deleteComment(comment.id, comment.authorId)}
+                                  className="rounded-full border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-600 transition hover:bg-red-50"
+                                >
+                                  Delete
+                                </button>
+                              ) : null}
                               <button
                                 type="button"
                                 onClick={() => {
                                   setReplyingToCommentId(comment.id);
                                   setReplyDraft("");
                                 }}
-                                disabled={isResolved}
+                                disabled={isResolved || isEditing}
                                 className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
                               >
                                 Reply
@@ -893,7 +1019,7 @@ export function EditorShell({ user }: EditorShellProps) {
                                   ))}
                               </div>
                             ) : null}
-                            {!isResolved && replyingToCommentId === comment.id ? (
+                            {!isResolved && !isEditing && replyingToCommentId === comment.id ? (
                               <div className="mt-2 rounded-xl bg-white/70 p-2.5">
                                 <textarea
                                   value={replyDraft}
