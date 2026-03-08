@@ -4,7 +4,7 @@ import { getCursor, getCursorPosition } from "@automerge/automerge";
 import type { Cursor } from "@automerge/automerge";
 import { useDocument, useDocuments, useRepo } from "@automerge/automerge-repo-react-hooks";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { DocumentIndexDoc, MarkdownDoc } from "@/lib/types";
 
@@ -75,6 +75,13 @@ interface EditorShellProps {
   };
 }
 
+interface PendingComment {
+  anchorStart: number;
+  anchorEnd: number;
+  selectedText: string;
+  body: string;
+}
+
 function randomInt(max: number): number {
   const bytes = new Uint32Array(1);
   crypto.getRandomValues(bytes);
@@ -99,11 +106,23 @@ function toLineAndColumn(text: string, index: number): string {
   return `L${line}:C${column}`;
 }
 
+function formatCommentDate(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(timestamp));
+}
+
 export function EditorShell({ user }: EditorShellProps) {
   const repo = useRepo();
   const router = useRouter();
   const searchParams = useSearchParams();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [selectionRange, setSelectionRange] = useState({ start: 0, end: 0 });
+  const [pendingComment, setPendingComment] = useState<PendingComment | null>(null);
+  const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
+  const [replyingToCommentId, setReplyingToCommentId] = useState<string | null>(null);
+  const [replyDraft, setReplyDraft] = useState("");
 
   const docParam = searchParams.get("doc");
   const activeDocUrl = (docParam ?? undefined) as AutomergeUrl | undefined;
@@ -232,7 +251,31 @@ export function EditorShell({ user }: EditorShellProps) {
     if (!element) {
       return;
     }
-    updateLocalSelection(element.selectionStart ?? 0, element.selectionEnd ?? 0);
+    const start = element.selectionStart ?? 0;
+    const end = element.selectionEnd ?? 0;
+    setSelectionRange({ start, end });
+    updateLocalSelection(start, end);
+  }, [updateLocalSelection]);
+
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const element = textareaRef.current;
+      if (!element) {
+        return;
+      }
+      if (document.activeElement !== element) {
+        return;
+      }
+      const start = element.selectionStart ?? 0;
+      const end = element.selectionEnd ?? 0;
+      setSelectionRange({ start, end });
+      updateLocalSelection(start, end);
+    };
+
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange);
+    };
   }, [updateLocalSelection]);
 
   useEffect(() => {
@@ -244,8 +287,146 @@ export function EditorShell({ user }: EditorShellProps) {
       updateLocalSelection(0, 0);
       return;
     }
-    updateLocalSelection(element.selectionStart ?? 0, element.selectionEnd ?? 0);
+    const start = element.selectionStart ?? 0;
+    const end = element.selectionEnd ?? 0;
+    updateLocalSelection(start, end);
   }, [activeDoc, activeDocUrl, updateLocalSelection]);
+
+  const orderedSelection = useMemo(() => {
+    const start = Math.min(selectionRange.start, selectionRange.end);
+    const end = Math.max(selectionRange.start, selectionRange.end);
+    return { start, end };
+  }, [selectionRange.end, selectionRange.start]);
+
+  const selectedText = useMemo(() => {
+    const sourceText = activeDoc?.content ?? "";
+    if (!sourceText) {
+      return "";
+    }
+    if (orderedSelection.end <= orderedSelection.start) {
+      return "";
+    }
+    return sourceText.slice(orderedSelection.start, orderedSelection.end);
+  }, [activeDoc?.content, orderedSelection.end, orderedSelection.start]);
+
+  const hasSelection = orderedSelection.end > orderedSelection.start;
+  const comments = activeDoc?.comments ?? [];
+  const hasComments = comments.length > 0;
+  const hasCommentMargin = hasComments || Boolean(pendingComment);
+
+  const highlightRange = useCallback(
+    (start: number, end: number) => {
+      const element = textareaRef.current;
+      if (!element) {
+        return;
+      }
+      const from = Math.max(0, Math.min(start, end));
+      const to = Math.max(0, Math.max(start, end));
+      element.focus();
+      element.selectionStart = from;
+      element.selectionEnd = to;
+      setSelectionRange({ start: from, end: to });
+      updateLocalSelection(from, to);
+    },
+    [updateLocalSelection],
+  );
+
+  const openPendingComment = () => {
+    if (!hasSelection || !selectedText.trim()) {
+      return;
+    }
+
+    setPendingComment({
+      anchorStart: orderedSelection.start,
+      anchorEnd: orderedSelection.end,
+      selectedText,
+      body: "",
+    });
+  };
+
+  const submitPendingComment = () => {
+    if (!activeDoc || !pendingComment || !pendingComment.body.trim()) {
+      return;
+    }
+
+    const body = pendingComment.body.trim();
+    const anchorStart = pendingComment.anchorStart;
+    const anchorEnd = pendingComment.anchorEnd;
+
+    const commentId = crypto.randomUUID();
+    changeActiveDoc((doc) => {
+      if (!doc.comments) {
+        doc.comments = [];
+      }
+      doc.comments.push({
+        id: commentId,
+        authorId: user.id,
+        authorName: user.name,
+        anchorStart,
+        anchorEnd,
+        body,
+        createdAt: Date.now(),
+        replies: [],
+        resolved: false,
+      });
+    });
+
+    setPendingComment(null);
+    setHoveredCommentId(commentId);
+    highlightRange(anchorStart, anchorEnd);
+  };
+
+  const submitReply = (commentId: string) => {
+    const body = replyDraft.trim();
+    if (!activeDoc || !body) {
+      return;
+    }
+
+    changeActiveDoc((doc) => {
+      if (!doc.comments) {
+        return;
+      }
+      const parent = doc.comments.find((comment) => comment.id === commentId);
+      if (!parent) {
+        return;
+      }
+      if (!parent.replies) {
+        parent.replies = [];
+      }
+      parent.replies.push({
+        id: crypto.randomUUID(),
+        authorId: user.id,
+        authorName: user.name,
+        body,
+        createdAt: Date.now(),
+      });
+    });
+
+    setReplyDraft("");
+    setReplyingToCommentId(null);
+  };
+
+  const toggleResolved = (commentId: string) => {
+    if (!activeDoc) {
+      return;
+    }
+
+    changeActiveDoc((doc) => {
+      if (!doc.comments) {
+        return;
+      }
+      const comment = doc.comments.find((entry) => entry.id === commentId);
+      if (!comment) {
+        return;
+      }
+      comment.resolved = !comment.resolved;
+    });
+
+    if (replyingToCommentId === commentId) {
+      setReplyingToCommentId(null);
+      setReplyDraft("");
+    }
+  };
 
   const collaboratorCursors = useMemo(() => {
     if (!activeDoc?.cursors) {
@@ -340,73 +521,323 @@ export function EditorShell({ user }: EditorShellProps) {
             Pick a document from the sidebar or create a new one.
           </div>
         ) : (
-          <div className="mx-auto max-w-4xl space-y-4">
-            <input
-              type="text"
-              value={activeDoc.title}
-              onChange={(event) =>
-                changeActiveDoc((doc) => {
-                  doc.title = event.target.value;
-                })
-              }
-              className="w-full rounded-lg border border-black/15 bg-white px-4 py-3 text-2xl font-semibold outline-none focus:border-black/40"
-              placeholder="Document title"
-            />
+          <div className="w-full space-y-4">
+            <div
+              className={`flex gap-6 ${
+                hasCommentMargin ? "flex-col lg:flex-row lg:items-start" : ""
+              }`}
+            >
+              <section className={`${hasCommentMargin ? "min-w-0 flex-1" : "w-full"}`}>
+                <div className="space-y-4">
+                  <input
+                    type="text"
+                    value={activeDoc.title}
+                    onChange={(event) =>
+                      changeActiveDoc((doc) => {
+                        doc.title = event.target.value;
+                      })
+                    }
+                    className="w-full rounded-lg border border-black/15 bg-white px-4 py-3 text-2xl font-semibold outline-none focus:border-black/40"
+                    placeholder="Document title"
+                  />
 
-            {collaboratorCursors.length > 0 ? (
-              <div className="rounded-lg border border-black/10 bg-white p-3 text-xs">
-                <p className="mb-2 font-semibold text-black/70">Collaborators</p>
-                <div className="space-y-1">
-                  {collaboratorCursors.map((entry) => (
-                    <p key={entry.userId} className="truncate text-black/70">
-                      {entry.displayName} at{" "}
-                      {toLineAndColumn(activeDoc.content ?? "", entry.startIndex)}
-                      {entry.startIndex !== entry.endIndex
-                        ? ` - ${toLineAndColumn(activeDoc.content ?? "", entry.endIndex)}`
-                        : ""}
-                    </p>
-                  ))}
+                  {collaboratorCursors.length > 0 ? (
+                    <div className="rounded-lg border border-black/10 bg-white p-3 text-xs">
+                      <p className="mb-2 font-semibold text-black/70">Collaborators</p>
+                      <div className="space-y-1">
+                        {collaboratorCursors.map((entry) => (
+                          <p key={entry.userId} className="truncate text-black/70">
+                            {entry.displayName} at{" "}
+                            {toLineAndColumn(activeDoc.content ?? "", entry.startIndex)}
+                            {entry.startIndex !== entry.endIndex
+                              ? ` - ${toLineAndColumn(activeDoc.content ?? "", entry.endIndex)}`
+                              : ""}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="relative">
+                    {hasSelection && !pendingComment ? (
+                      <div className="absolute -right-14 top-10 z-20 hidden lg:block">
+                        <div className="flex flex-col overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_4px_14px_rgba(0,0,0,0.16)]">
+                          <button
+                            type="button"
+                            onClick={openPendingComment}
+                            aria-label="Add comment"
+                            className="flex h-10 w-10 items-center justify-center border-b border-black/10 text-lg font-semibold leading-none text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <textarea
+                      ref={textareaRef}
+                      value={activeDoc.content}
+                      onChange={(event) =>
+                        changeActiveDoc((doc) => {
+                          doc.content = event.target.value;
+                          if (!doc.cursors) {
+                            doc.cursors = {};
+                          }
+                          const startCursor = getCursor(
+                            doc,
+                            ["content"],
+                            event.target.selectionStart ?? 0,
+                            "after",
+                          );
+                          const endCursor = getCursor(
+                            doc,
+                            ["content"],
+                            event.target.selectionEnd ?? 0,
+                            "after",
+                          );
+                          doc.cursors[user.id] = {
+                            userId: user.id,
+                            displayName: user.name,
+                            cursor: startCursor,
+                            selectionCursor: endCursor,
+                            updatedAt: Date.now(),
+                          };
+                        })
+                      }
+                      onSelect={captureTextareaSelection}
+                      onMouseUp={captureTextareaSelection}
+                      onTouchEnd={captureTextareaSelection}
+                      onKeyUp={captureTextareaSelection}
+                      onFocus={captureTextareaSelection}
+                      className="h-[70vh] w-full resize-y rounded-lg border border-black/15 bg-white p-4 font-mono text-sm outline-none selection:bg-[#f6e8b1] selection:text-black focus:border-black/40"
+                      placeholder="Write markdown..."
+                    />
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              </section>
 
-            <textarea
-              ref={textareaRef}
-              value={activeDoc.content}
-              onChange={(event) =>
-                changeActiveDoc((doc) => {
-                  doc.content = event.target.value;
-                  if (!doc.cursors) {
-                    doc.cursors = {};
-                  }
-                  const startCursor = getCursor(
-                    doc,
-                    ["content"],
-                    event.target.selectionStart ?? 0,
-                    "after",
-                  );
-                  const endCursor = getCursor(
-                    doc,
-                    ["content"],
-                    event.target.selectionEnd ?? 0,
-                    "after",
-                  );
-                  doc.cursors[user.id] = {
-                    userId: user.id,
-                    displayName: user.name,
-                    cursor: startCursor,
-                    selectionCursor: endCursor,
-                    updatedAt: Date.now(),
-                  };
-                })
-              }
-              onSelect={captureTextareaSelection}
-              onKeyUp={captureTextareaSelection}
-              onClick={captureTextareaSelection}
-              onFocus={captureTextareaSelection}
-              className="h-[70vh] w-full resize-y rounded-lg border border-black/15 bg-white p-4 font-mono text-sm outline-none focus:border-black/40"
-              placeholder="Write markdown..."
-            />
+              {hasCommentMargin ? (
+                <aside className="w-full shrink-0 space-y-3 lg:sticky lg:top-8 lg:w-[420px]">
+                  {pendingComment ? (
+                    <article className="rounded-2xl border border-black/10 bg-white p-4 shadow-[0_6px_20px_rgba(0,0,0,0.14)]">
+                      <div className="mb-3 flex items-center gap-2">
+                        {user.image ? (
+                          <img
+                            src={user.image}
+                            alt={user.name}
+                            className="h-8 w-8 rounded-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold">
+                            {avatarFallback(user.name, user.email)}
+                          </div>
+                        )}
+                        <p className="truncate text-xl font-medium leading-6">{user.name}</p>
+                      </div>
+
+                      <textarea
+                        value={pendingComment.body}
+                        onChange={(event) =>
+                          setPendingComment((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  body: event.target.value,
+                                }
+                              : current,
+                          )
+                        }
+                        className="h-11 w-full resize-none rounded-full border border-[#1a73e8] bg-white px-4 py-2 text-base leading-6 outline-none focus:border-[#1a73e8]"
+                        placeholder="Comment or add others with @"
+                      />
+                      <p className="mt-2 max-h-10 overflow-hidden text-xs text-black/55">
+                        {toLineAndColumn(activeDoc.content ?? "", pendingComment.anchorStart)}
+                        {" - "}
+                        {toLineAndColumn(activeDoc.content ?? "", pendingComment.anchorEnd)}
+                        {" · "}
+                        {pendingComment.selectedText}
+                      </p>
+                      <div className="mt-3 flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPendingComment(null)}
+                          className="rounded-full px-4 py-2 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={submitPendingComment}
+                          disabled={!pendingComment.body.trim()}
+                          className="rounded-full bg-[#1a73e8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                        >
+                          Submit
+                        </button>
+                      </div>
+                    </article>
+                  ) : null}
+
+                  {comments.length > 0 ? (
+                    <p className="px-1 text-xs font-semibold uppercase tracking-wide text-black/55">
+                      Comments ({comments.length})
+                    </p>
+                  ) : null}
+
+                  <div className="max-h-[78vh] space-y-2 overflow-y-auto pr-1">
+                    {comments
+                      .slice()
+                      .sort((a, b) => b.createdAt - a.createdAt)
+                      .map((comment) => {
+                        const isHovered = hoveredCommentId === comment.id;
+                        const isResolved = Boolean(comment.resolved);
+                        return (
+                          <article
+                            key={comment.id}
+                            onMouseEnter={() => {
+                              setHoveredCommentId(comment.id);
+                              highlightRange(comment.anchorStart, comment.anchorEnd);
+                            }}
+                            onMouseLeave={() => {
+                              setHoveredCommentId((current) =>
+                                current === comment.id ? null : current,
+                              );
+                            }}
+                            className={`group rounded-2xl p-4 transition ${
+                              isHovered
+                                ? "bg-[#dce3ef] shadow-[0_8px_20px_rgba(0,0,0,0.14)]"
+                                : isResolved
+                                  ? "bg-[#ecf0f6]"
+                                  : "bg-[#e5ebf4]"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex min-w-0 items-start gap-3">
+                                {comment.authorId === user.id && user.image ? (
+                                  <img
+                                    src={user.image}
+                                    alt={comment.authorName}
+                                    className="mt-0.5 h-8 w-8 rounded-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold text-black/65">
+                                    {avatarFallback(comment.authorName, "")}
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <p className="truncate text-base font-semibold leading-5 text-black/80">
+                                    {comment.authorName}
+                                  </p>
+                                  <p className="text-xs text-black/65">
+                                    {formatCommentDate(comment.createdAt)}
+                                  </p>
+                                </div>
+                              </div>
+                              <div
+                                className={`flex items-center gap-3 ${
+                                  isHovered ? "opacity-100" : "opacity-0"
+                                } transition`}
+                              >
+                                <button
+                                  type="button"
+                                  aria-label="Comment options"
+                                  className="text-lg leading-none text-black/60"
+                                >
+                                  ⋮
+                                </button>
+                              </div>
+                            </div>
+                            <div className={`mt-2 rounded-xl px-3 py-2 ${isHovered ? "bg-[#c9d1df]" : ""}`}>
+                              <p className="whitespace-pre-wrap text-base leading-6 text-black/70">
+                                {comment.body}
+                              </p>
+                            </div>
+                            <div className="mt-2 flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => toggleResolved(comment.id)}
+                                className="rounded-full border border-[#0b57d0]/30 bg-white px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                              >
+                                {isResolved ? "Re-open" : "Resolve"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setReplyingToCommentId(comment.id);
+                                  setReplyDraft("");
+                                }}
+                                disabled={isResolved}
+                                className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                              >
+                                Reply
+                              </button>
+                            </div>
+                            {isResolved ? (
+                              <p className="mt-2 text-sm text-black/55">
+                                Thread resolved
+                              </p>
+                            ) : null}
+                            {!isResolved && (comment.replies?.length ?? 0) > 0 ? (
+                              <div className="mt-2 space-y-2 pl-3">
+                                {comment.replies
+                                  .slice()
+                                  .sort((a, b) => a.createdAt - b.createdAt)
+                                  .map((reply) => (
+                                    <div
+                                      key={reply.id}
+                                      className="rounded-xl bg-white/70 px-3 py-2"
+                                    >
+                                      <div className="flex items-center justify-between gap-2">
+                                        <p className="truncate text-sm font-semibold text-black/75">
+                                          {reply.authorName}
+                                        </p>
+                                        <p className="text-[11px] text-black/50">
+                                          {formatCommentDate(reply.createdAt)}
+                                        </p>
+                                      </div>
+                                      <p className="mt-1 whitespace-pre-wrap text-sm text-black/70">
+                                        {reply.body}
+                                      </p>
+                                    </div>
+                                  ))}
+                              </div>
+                            ) : null}
+                            {!isResolved && replyingToCommentId === comment.id ? (
+                              <div className="mt-2 rounded-xl bg-white/70 p-2.5">
+                                <textarea
+                                  value={replyDraft}
+                                  onChange={(event) => setReplyDraft(event.target.value)}
+                                  className="h-10 w-full resize-none rounded-full border border-[#1a73e8] bg-white px-4 py-2 text-sm outline-none focus:border-[#1a73e8]"
+                                  placeholder="Write a reply..."
+                                />
+                                <div className="mt-2 flex items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setReplyingToCommentId(null);
+                                      setReplyDraft("");
+                                    }}
+                                    className="rounded-full px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => submitReply(comment.id)}
+                                    disabled={!replyDraft.trim()}
+                                    className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                                  >
+                                    Reply
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
+                          </article>
+                        );
+                      })}
+                  </div>
+                </aside>
+              ) : null}
+            </div>
           </div>
         )}
       </main>
