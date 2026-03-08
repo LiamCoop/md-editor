@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:automerge.org)",
-      "Bash(npm info:*)"
+      "Bash(npm info:*)",
+      "Skill(railway:use-railway)",
+      "Bash(git remote:*)"
     ]
   }
 }
