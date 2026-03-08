@@ -33,6 +33,40 @@ interface FloatingCommentButtonPosition {
   left: number;
 }
 
+interface AnchoredCommentPosition {
+  top: number;
+}
+
+function areFloatingPositionsEqual(
+  a: FloatingCommentButtonPosition | null,
+  b: FloatingCommentButtonPosition | null,
+): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
+  return a.top === b.top && a.left === b.left;
+}
+
+function areAnchoredPositionsEqual(
+  a: Record<string, AnchoredCommentPosition>,
+  b: Record<string, AnchoredCommentPosition>,
+): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) {
+    return false;
+  }
+  for (const key of aKeys) {
+    if (!b[key] || a[key].top !== b[key].top) {
+      return false;
+    }
+  }
+  return true;
+}
+
 const setCommentHighlightsEffect = StateEffect.define<readonly { from: number; to: number }[]>();
 
 const commentHighlightsField = StateField.define({
@@ -61,7 +95,7 @@ const commentHighlightsField = StateField.define({
 
 const editorTheme = EditorView.theme({
   "&": {
-    height: "70vh",
+    height: "auto",
   },
   "&.cm-editor": {
     outline: "none",
@@ -69,9 +103,11 @@ const editorTheme = EditorView.theme({
   ".cm-scroller": {
     fontFamily: "var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: "0.875rem",
+    overflow: "visible",
   },
   ".cm-content": {
     padding: "1rem",
+    minHeight: "70vh",
   },
   ".cm-focused": {
     outline: "none",
@@ -106,6 +142,8 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
   const repo = useRepo();
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
+  const commentCardRefs = useRef<Record<string, HTMLElement | null>>({});
+  const pendingCommentRef = useRef<HTMLElement | null>(null);
   const [selectionRange, setSelectionRange] = useState({ start: 0, end: 0 });
   const [pendingComment, setPendingComment] = useState<PendingComment | null>(null);
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
@@ -116,6 +154,10 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
   const [openCommentMenuId, setOpenCommentMenuId] = useState<string | null>(null);
   const [floatingCommentButtonPosition, setFloatingCommentButtonPosition] =
     useState<FloatingCommentButtonPosition | null>(null);
+  const [anchoredCommentPositions, setAnchoredCommentPositions] = useState<
+    Record<string, AnchoredCommentPosition>
+  >({});
+  const [pendingCommentTop, setPendingCommentTop] = useState<number | null>(null);
   const [commentHighlightRange, setCommentHighlightRange] = useState<{
     start: number;
     end: number;
@@ -316,7 +358,6 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
   const hasSelection = orderedSelection.end > orderedSelection.start;
   const comments = activeDoc?.comments ?? [];
   const hasComments = comments.length > 0;
-  const hasCommentMargin = hasComments || Boolean(pendingComment);
 
   const highlightRange = useCallback(
     (start: number, end: number) => {
@@ -337,13 +378,17 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
 
   const updateFloatingCommentButtonPosition = useCallback(() => {
     if (!hasSelection || pendingComment) {
-      setFloatingCommentButtonPosition(null);
+      setFloatingCommentButtonPosition((current) =>
+        current === null ? current : null,
+      );
       return;
     }
     const view = editorViewRef.current;
     const host = editorHostRef.current;
     if (!view || !host) {
-      setFloatingCommentButtonPosition(null);
+      setFloatingCommentButtonPosition((current) =>
+        current === null ? current : null,
+      );
       return;
     }
 
@@ -351,14 +396,18 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
     const start = Math.max(0, Math.min(orderedSelection.start, docLength));
     const end = Math.max(start, Math.min(orderedSelection.end, docLength));
     if (end <= start) {
-      setFloatingCommentButtonPosition(null);
+      setFloatingCommentButtonPosition((current) =>
+        current === null ? current : null,
+      );
       return;
     }
 
     const startCoords = view.coordsAtPos(start);
     const endCoords = view.coordsAtPos(end) ?? view.coordsAtPos(Math.max(start, end - 1));
     if (!startCoords || !endCoords) {
-      setFloatingCommentButtonPosition(null);
+      setFloatingCommentButtonPosition((current) =>
+        current === null ? current : null,
+      );
       return;
     }
 
@@ -368,24 +417,122 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
     const rawTop = Math.min(startCoords.top, endCoords.top) - hostRect.top - buttonSize - gap;
     const rawLeft = Math.max(startCoords.right, endCoords.right) - hostRect.left + gap;
 
-    const clampedTop = Math.min(
-      Math.max(rawTop, gap),
-      Math.max(gap, hostRect.height - buttonSize - gap),
-    );
+    const clampedTop = Math.max(rawTop, gap);
     const clampedLeft = Math.min(
       Math.max(rawLeft, gap),
       Math.max(gap, hostRect.width - buttonSize - gap),
     );
 
-    setFloatingCommentButtonPosition({
+    const nextPosition: FloatingCommentButtonPosition = {
       top: clampedTop,
       left: clampedLeft,
-    });
+    };
+    setFloatingCommentButtonPosition((current) =>
+      areFloatingPositionsEqual(current, nextPosition) ? current : nextPosition,
+    );
   }, [hasSelection, orderedSelection.end, orderedSelection.start, pendingComment]);
+
+  const getAnchorTopForOffset = useCallback((offset: number): number | null => {
+    const view = editorViewRef.current;
+    const host = editorHostRef.current;
+    if (!view || !host) {
+      return null;
+    }
+    const docLength = view.state.doc.length;
+    const position = Math.max(0, Math.min(offset, docLength));
+    const coords = view.coordsAtPos(position);
+    if (!coords) {
+      return null;
+    }
+    const hostRect = host.getBoundingClientRect();
+    return Math.max(coords.top - hostRect.top, 0);
+  }, []);
+
+  const updateAnchoredCommentPositions = useCallback(() => {
+    const items: Array<{
+      id: string;
+      kind: "comment" | "pending";
+      anchorTop: number;
+      createdAt: number;
+      height: number;
+    }> = [];
+
+    for (const comment of comments) {
+      const anchorTop = getAnchorTopForOffset(comment.anchorStart);
+      if (anchorTop === null) {
+        continue;
+      }
+      const measuredHeight = commentCardRefs.current[comment.id]?.offsetHeight ?? 220;
+      items.push({
+        id: comment.id,
+        kind: "comment",
+        anchorTop,
+        createdAt: comment.createdAt,
+        height: measuredHeight,
+      });
+    }
+
+    if (pendingComment) {
+      const pendingAnchorTop = getAnchorTopForOffset(pendingComment.anchorStart);
+      if (pendingAnchorTop !== null) {
+        const measuredPendingHeight = pendingCommentRef.current?.offsetHeight ?? 170;
+      items.push({
+        id: "__pending__",
+        kind: "pending",
+        anchorTop: pendingAnchorTop,
+        createdAt: Number.MAX_SAFE_INTEGER,
+        height: measuredPendingHeight,
+      });
+      }
+    }
+
+    items.sort((a, b) => a.anchorTop - b.anchorTop || a.createdAt - b.createdAt);
+
+    const minGap = 14;
+    let nextAvailableTop = 0;
+    const nextCommentPositions: Record<string, AnchoredCommentPosition> = {};
+    let nextPendingTop: number | null = null;
+
+    for (const item of items) {
+      const top = Math.max(item.anchorTop, nextAvailableTop);
+      nextAvailableTop = top + item.height + minGap;
+      if (item.kind === "comment") {
+        nextCommentPositions[item.id] = { top };
+      } else {
+        nextPendingTop = top;
+      }
+    }
+
+    setAnchoredCommentPositions((current) =>
+      areAnchoredPositionsEqual(current, nextCommentPositions)
+        ? current
+        : nextCommentPositions,
+    );
+    setPendingCommentTop((current) => (current === nextPendingTop ? current : nextPendingTop));
+  }, [comments, getAnchorTopForOffset, pendingComment]);
 
   useEffect(() => {
     updateFloatingCommentButtonPosition();
-  }, [updateFloatingCommentButtonPosition, activeDocContent]);
+    updateAnchoredCommentPositions();
+  }, [updateFloatingCommentButtonPosition, updateAnchoredCommentPositions, activeDocContent]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      updateAnchoredCommentPositions();
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [
+    comments,
+    pendingComment,
+    replyingToCommentId,
+    replyDraft,
+    editingCommentId,
+    editingCommentDraft,
+    openCommentMenuId,
+    updateAnchoredCommentPositions,
+  ]);
 
   useEffect(() => {
     const host = editorHostRef.current;
@@ -399,6 +546,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
 
     const handleReposition = () => {
       updateFloatingCommentButtonPosition();
+      updateAnchoredCommentPositions();
     };
 
     scroller.addEventListener("scroll", handleReposition);
@@ -407,7 +555,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
       scroller.removeEventListener("scroll", handleReposition);
       window.removeEventListener("resize", handleReposition);
     };
-  }, [activeDocUrl, updateFloatingCommentButtonPosition]);
+  }, [activeDocUrl, updateFloatingCommentButtonPosition, updateAnchoredCommentPositions]);
 
   useEffect(() => {
     const view = editorViewRef.current;
@@ -656,14 +804,27 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
           Loading document...
         </div>
       ) : (
-        <div className="w-full space-y-4">
-          <header className="flex items-center justify-between gap-4">
-            <Link
-              href="/editor"
-              className="rounded-md border border-black/15 bg-white px-3 py-2 text-sm font-medium transition hover:bg-black/5"
-            >
-              Documents
-            </Link>
+        <div className="mx-auto w-full max-w-[1320px] space-y-4">
+          <header className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              <Link
+                href="/editor"
+                className="rounded-md border border-black/15 bg-white px-3 py-2 text-sm font-medium transition hover:bg-black/5"
+              >
+                Documents
+              </Link>
+              <input
+                type="text"
+                value={activeDoc.title}
+                onChange={(event) =>
+                  changeActiveDoc((doc) => {
+                    doc.title = event.target.value;
+                  })
+                }
+                className="w-full max-w-2xl rounded-lg border border-black/15 bg-white px-4 py-2 text-xl font-semibold outline-none focus:border-black/40"
+                placeholder="Document title"
+              />
+            </div>
             <div className="flex min-w-0 items-center gap-3 rounded-lg border border-black/10 bg-white px-3 py-2">
               {user.image ? (
                 <img
@@ -683,353 +844,334 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
             </div>
           </header>
 
-          <div
-            className={`flex gap-6 ${
-              hasCommentMargin ? "flex-col lg:flex-row lg:items-start" : ""
-            }`}
-          >
-            <section className={`${hasCommentMargin ? "min-w-0 flex-1" : "w-full"}`}>
-              <div className="space-y-4">
-                <input
-                  type="text"
-                  value={activeDoc.title}
-                  onChange={(event) =>
-                    changeActiveDoc((doc) => {
-                      doc.title = event.target.value;
-                    })
-                  }
-                  className="w-full rounded-lg border border-black/15 bg-white px-4 py-3 text-2xl font-semibold outline-none focus:border-black/40"
-                  placeholder="Document title"
-                />
+          {collaboratorCursors.length > 0 ? (
+            <div className="max-w-4xl rounded-lg border border-black/10 bg-white p-3 text-xs">
+              <p className="mb-2 font-semibold text-black/70">Collaborators</p>
+              <div className="space-y-1">
+                {collaboratorCursors.map((entry) => (
+                  <p key={entry.userId} className="truncate text-black/70">
+                    {entry.displayName} at{" "}
+                    {toLineAndColumn(activeDoc.content ?? "", entry.startIndex)}
+                    {entry.startIndex !== entry.endIndex
+                      ? ` - ${toLineAndColumn(activeDoc.content ?? "", entry.endIndex)}`
+                      : ""}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
-                {collaboratorCursors.length > 0 ? (
-                  <div className="rounded-lg border border-black/10 bg-white p-3 text-xs">
-                    <p className="mb-2 font-semibold text-black/70">Collaborators</p>
-                    <div className="space-y-1">
-                      {collaboratorCursors.map((entry) => (
-                        <p key={entry.userId} className="truncate text-black/70">
-                          {entry.displayName} at{" "}
-                          {toLineAndColumn(activeDoc.content ?? "", entry.startIndex)}
-                          {entry.startIndex !== entry.endIndex
-                            ? ` - ${toLineAndColumn(activeDoc.content ?? "", entry.endIndex)}`
-                            : ""}
-                        </p>
-                      ))}
+          <div className="relative pb-12">
+            <div className="max-w-4xl">
+              <div className="relative">
+                {hasSelection && !pendingComment && floatingCommentButtonPosition ? (
+                  <div
+                    className="absolute z-20"
+                    style={{
+                      top: floatingCommentButtonPosition.top,
+                      left: floatingCommentButtonPosition.left,
+                    }}
+                  >
+                    <div className="flex flex-col overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_4px_14px_rgba(0,0,0,0.16)]">
+                      <button
+                        type="button"
+                        onClick={openPendingComment}
+                        aria-label="Add comment"
+                        className="flex h-10 w-10 items-center justify-center border-b border-black/10 text-lg font-semibold leading-none text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                      >
+                        +
+                      </button>
                     </div>
                   </div>
                 ) : null}
 
-                <div className="relative">
-                  {hasSelection && !pendingComment && floatingCommentButtonPosition ? (
-                    <div
-                      className="absolute z-20"
-                      style={{
-                        top: floatingCommentButtonPosition.top,
-                        left: floatingCommentButtonPosition.left,
-                      }}
-                    >
-                      <div className="flex flex-col overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_4px_14px_rgba(0,0,0,0.16)]">
-                        <button
-                          type="button"
-                          onClick={openPendingComment}
-                          aria-label="Add comment"
-                          className="flex h-10 w-10 items-center justify-center border-b border-black/10 text-lg font-semibold leading-none text-[#0b57d0] transition hover:bg-[#e8f0fe]"
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div
-                    ref={editorHostRef}
-                    className="h-[70vh] w-full rounded-lg border border-black/15 bg-white"
-                  />
-                </div>
+                <div
+                  ref={editorHostRef}
+                  className="w-full rounded-lg border border-black/15 bg-white"
+                />
               </div>
-            </section>
+            </div>
 
-            {hasCommentMargin ? (
-              <aside className="w-full shrink-0 space-y-3 lg:sticky lg:top-8 lg:w-[420px]">
-                {pendingComment ? (
-                  <article className="rounded-2xl border border-black/10 bg-white p-4 shadow-[0_6px_20px_rgba(0,0,0,0.14)]">
-                    <div className="mb-3 flex items-center gap-2">
-                      {user.image ? (
-                        <img
-                          src={user.image}
-                          alt={user.name}
-                          className="h-8 w-8 rounded-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold">
-                          {avatarFallback(user.name, user.email)}
-                        </div>
-                      )}
-                      <p className="truncate text-xl font-medium leading-6">{user.name}</p>
-                    </div>
-
-                    <textarea
-                      value={pendingComment.body}
-                      onChange={(event) =>
-                        setPendingComment((current) =>
-                          current
-                            ? {
-                                ...current,
-                                body: event.target.value,
-                              }
-                            : current,
-                        )
-                      }
-                      className="h-11 w-full resize-none rounded-full border border-[#1a73e8] bg-white px-4 py-2 text-base leading-6 outline-none focus:border-[#1a73e8]"
-                      placeholder="Comment or add others with @"
+            {pendingComment && pendingCommentTop !== null ? (
+              <article
+                ref={pendingCommentRef}
+                className="absolute right-0 z-10 w-[320px] rounded-2xl border border-black/10 bg-white p-4 shadow-[0_6px_20px_rgba(0,0,0,0.14)]"
+                style={{ top: pendingCommentTop }}
+              >
+                <div className="mb-3 flex items-center gap-2">
+                  {user.image ? (
+                    <img
+                      src={user.image}
+                      alt={user.name}
+                      className="h-8 w-8 rounded-full object-cover"
                     />
-                    <div className="mt-3 flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setPendingComment(null)}
-                        className="rounded-full px-4 py-2 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={submitPendingComment}
-                        disabled={!pendingComment.body.trim()}
-                        className="rounded-full bg-[#1a73e8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
-                      >
-                        Submit
-                      </button>
+                  ) : (
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold">
+                      {avatarFallback(user.name, user.email)}
                     </div>
-                  </article>
-                ) : null}
+                  )}
+                  <p className="truncate text-xl font-medium leading-6">{user.name}</p>
+                </div>
 
-                {comments.length > 0 ? (
-                  <p className="px-1 text-xs font-semibold uppercase tracking-wide text-black/55">
-                    Comments ({comments.length})
-                  </p>
-                ) : null}
+                <textarea
+                  value={pendingComment.body}
+                  onChange={(event) =>
+                    setPendingComment((current) =>
+                      current
+                        ? {
+                            ...current,
+                            body: event.target.value,
+                          }
+                        : current,
+                    )
+                  }
+                  className="h-11 w-full resize-none rounded-full border border-[#1a73e8] bg-white px-4 py-2 text-base leading-6 outline-none focus:border-[#1a73e8]"
+                  placeholder="Comment or add others with @"
+                />
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPendingComment(null)}
+                    className="rounded-full px-4 py-2 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitPendingComment}
+                    disabled={!pendingComment.body.trim()}
+                    className="rounded-full bg-[#1a73e8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                  >
+                    Submit
+                  </button>
+                </div>
+              </article>
+            ) : null}
 
-                <div className="max-h-[78vh] space-y-2 overflow-y-auto pr-1">
-                  {comments
-                    .slice()
-                    .sort((a, b) => b.createdAt - a.createdAt)
-                    .map((comment) => {
-                      const isHovered = hoveredCommentId === comment.id;
-                      const isResolved = Boolean(comment.resolved);
-                      const isOwner = comment.authorId === user.id;
-                      const isEditing = editingCommentId === comment.id;
-                      return (
-                        <article
-                          key={comment.id}
-                          onMouseEnter={() => {
-                            setHoveredCommentId(comment.id);
-                            highlightRange(comment.anchorStart, comment.anchorEnd);
-                          }}
-                          onMouseLeave={() => {
-                            if (hoveredCommentId === comment.id) {
-                              setHoveredCommentId(null);
-                              setCommentHighlightRange(null);
-                            }
-                          }}
-                          className={`group rounded-2xl p-4 transition ${
-                            isHovered
-                              ? "bg-[#dce3ef] shadow-[0_8px_20px_rgba(0,0,0,0.14)]"
-                              : isResolved
-                                ? "bg-[#ecf0f6]"
-                                : "bg-[#e5ebf4]"
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex min-w-0 items-start gap-3">
-                              {comment.authorId === user.id && user.image ? (
-                                <img
-                                  src={user.image}
-                                  alt={comment.authorName}
-                                  className="mt-0.5 h-8 w-8 rounded-full object-cover"
-                                />
-                              ) : (
-                                <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold text-black/65">
-                                  {avatarFallback(comment.authorName, "")}
-                                </div>
-                              )}
-                              <div className="min-w-0">
-                                <p className="truncate text-base font-semibold leading-5 text-black/80">
-                                  {comment.authorName}
-                                </p>
-                                <p className="text-xs text-black/65">
-                                  {formatCommentDate(comment.createdAt)}
-                                </p>
-                              </div>
+            {hasComments
+              ? comments.map((comment) => {
+                  const isHovered = hoveredCommentId === comment.id;
+                  const isResolved = Boolean(comment.resolved);
+                  const isOwner = comment.authorId === user.id;
+                  const isEditing = editingCommentId === comment.id;
+                  const anchoredPosition = anchoredCommentPositions[comment.id];
+                  if (!anchoredPosition) {
+                    return null;
+                  }
+                  return (
+                    <article
+                      ref={(element) => {
+                        commentCardRefs.current[comment.id] = element;
+                      }}
+                      key={comment.id}
+                      onMouseEnter={() => {
+                        setHoveredCommentId(comment.id);
+                        highlightRange(comment.anchorStart, comment.anchorEnd);
+                      }}
+                      onMouseLeave={() => {
+                        if (hoveredCommentId === comment.id) {
+                          setHoveredCommentId(null);
+                          setCommentHighlightRange(null);
+                        }
+                      }}
+                      className={`group absolute right-0 z-[5] w-[320px] rounded-2xl p-4 transition ${
+                        isHovered
+                          ? "bg-[#dce3ef] shadow-[0_8px_20px_rgba(0,0,0,0.14)]"
+                          : isResolved
+                            ? "bg-[#ecf0f6]"
+                            : "bg-[#e5ebf4]"
+                      }`}
+                      style={{ top: anchoredPosition.top }}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-start gap-3">
+                          {comment.authorId === user.id && user.image ? (
+                            <img
+                              src={user.image}
+                              alt={comment.authorName}
+                              className="mt-0.5 h-8 w-8 rounded-full object-cover"
+                            />
+                          ) : (
+                            <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold text-black/65">
+                              {avatarFallback(comment.authorName, "")}
                             </div>
-                            {isOwner ? (
-                              <div
-                                data-comment-menu-root="true"
-                                className={`relative flex items-center gap-3 ${
-                                  isHovered || openCommentMenuId === comment.id
-                                    ? "opacity-100"
-                                    : "opacity-0"
-                                } transition`}
-                              >
+                          )}
+                          <div className="min-w-0">
+                            <p className="truncate text-base font-semibold leading-5 text-black/80">
+                              {comment.authorName}
+                            </p>
+                            <p className="text-xs text-black/65">
+                              {formatCommentDate(comment.createdAt)}
+                            </p>
+                          </div>
+                        </div>
+                        {isOwner ? (
+                          <div
+                            data-comment-menu-root="true"
+                            className={`relative flex items-center gap-3 ${
+                              isHovered || openCommentMenuId === comment.id
+                                ? "opacity-100"
+                                : "opacity-0"
+                            } transition`}
+                          >
+                            <button
+                              type="button"
+                              aria-label="Comment options"
+                              onClick={() =>
+                                setOpenCommentMenuId((current) =>
+                                  current === comment.id ? null : comment.id,
+                                )
+                              }
+                              className="rounded-md px-2 py-1 text-lg leading-none text-black/60 transition hover:bg-black/10"
+                            >
+                              ⋮
+                            </button>
+                            {openCommentMenuId === comment.id ? (
+                              <div className="absolute right-0 top-8 z-20 w-28 rounded-lg border border-black/10 bg-white p-1 shadow-[0_8px_20px_rgba(0,0,0,0.14)]">
                                 <button
                                   type="button"
-                                  aria-label="Comment options"
                                   onClick={() =>
-                                    setOpenCommentMenuId((current) =>
-                                      current === comment.id ? null : comment.id,
+                                    startEditingComment(
+                                      comment.id,
+                                      comment.body,
+                                      comment.authorId,
                                     )
                                   }
-                                  className="rounded-md px-2 py-1 text-lg leading-none text-black/60 transition hover:bg-black/10"
+                                  className="block w-full rounded-md px-3 py-2 text-left text-sm text-black/80 transition hover:bg-black/5"
                                 >
-                                  ⋮
+                                  Edit
                                 </button>
-                                {openCommentMenuId === comment.id ? (
-                                  <div className="absolute right-0 top-8 z-20 w-28 rounded-lg border border-black/10 bg-white p-1 shadow-[0_8px_20px_rgba(0,0,0,0.14)]">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        startEditingComment(
-                                          comment.id,
-                                          comment.body,
-                                          comment.authorId,
-                                        )
-                                      }
-                                      className="block w-full rounded-md px-3 py-2 text-left text-sm text-black/80 transition hover:bg-black/5"
-                                    >
-                                      Edit
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => deleteComment(comment.id, comment.authorId)}
-                                      className="block w-full rounded-md px-3 py-2 text-left text-sm text-red-600 transition hover:bg-red-50"
-                                    >
-                                      Delete
-                                    </button>
-                                  </div>
-                                ) : null}
+                                <button
+                                  type="button"
+                                  onClick={() => deleteComment(comment.id, comment.authorId)}
+                                  className="block w-full rounded-md px-3 py-2 text-left text-sm text-red-600 transition hover:bg-red-50"
+                                >
+                                  Delete
+                                </button>
                               </div>
                             ) : null}
                           </div>
-                          {isEditing ? (
-                            <div className="mt-2 rounded-xl bg-white/70 p-2.5">
-                              <textarea
-                                value={editingCommentDraft}
-                                onChange={(event) =>
-                                  setEditingCommentDraft(event.target.value)
-                                }
-                                className="h-16 w-full resize-y rounded-xl border border-[#1a73e8] bg-white px-3 py-2 text-sm outline-none focus:border-[#1a73e8]"
-                                placeholder="Edit your comment..."
-                              />
-                              <div className="mt-2 flex items-center justify-end gap-2">
-                                <button
-                                  type="button"
-                                  onClick={cancelEditingComment}
-                                  className="rounded-full px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => saveEditedComment(comment.id)}
-                                  disabled={!editingCommentDraft.trim()}
-                                  className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
-                                >
-                                  Save
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className={`mt-2 rounded-xl px-3 py-2 ${isHovered ? "bg-[#c9d1df]" : ""}`}>
-                              <p className="whitespace-pre-wrap text-base leading-6 text-black/70">
-                                {comment.body}
-                              </p>
-                            </div>
-                          )}
-                          <div className="mt-2 flex items-center gap-2">
+                        ) : null}
+                      </div>
+                      {isEditing ? (
+                        <div className="mt-2 rounded-xl bg-white/70 p-2.5">
+                          <textarea
+                            value={editingCommentDraft}
+                            onChange={(event) =>
+                              setEditingCommentDraft(event.target.value)
+                            }
+                            className="h-16 w-full resize-y rounded-xl border border-[#1a73e8] bg-white px-3 py-2 text-sm outline-none focus:border-[#1a73e8]"
+                            placeholder="Edit your comment..."
+                          />
+                          <div className="mt-2 flex items-center justify-end gap-2">
                             <button
                               type="button"
-                              onClick={() => toggleResolved(comment.id)}
-                              className="rounded-full border border-[#0b57d0]/30 bg-white px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                              onClick={cancelEditingComment}
+                              className="rounded-full px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
                             >
-                              {isResolved ? "Re-open" : "Resolve"}
+                              Cancel
                             </button>
                             <button
                               type="button"
+                              onClick={() => saveEditedComment(comment.id)}
+                              disabled={!editingCommentDraft.trim()}
+                              className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={`mt-2 rounded-xl px-3 py-2 ${isHovered ? "bg-[#c9d1df]" : ""}`}>
+                          <p className="whitespace-pre-wrap text-base leading-6 text-black/70">
+                            {comment.body}
+                          </p>
+                        </div>
+                      )}
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleResolved(comment.id)}
+                          className="rounded-full border border-[#0b57d0]/30 bg-white px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                        >
+                          {isResolved ? "Re-open" : "Resolve"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReplyingToCommentId(comment.id);
+                            setReplyDraft("");
+                          }}
+                          disabled={isResolved || isEditing}
+                          className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                        >
+                          Reply
+                        </button>
+                      </div>
+                      {isResolved ? (
+                        <p className="mt-2 text-sm text-black/55">
+                          Thread resolved
+                        </p>
+                      ) : null}
+                      {!isResolved && (comment.replies?.length ?? 0) > 0 ? (
+                        <div className="mt-2 space-y-2 pl-3">
+                          {comment.replies
+                            .slice()
+                            .sort((a, b) => a.createdAt - b.createdAt)
+                            .map((reply) => (
+                              <div
+                                key={reply.id}
+                                className="rounded-xl bg-white/70 px-3 py-2"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="truncate text-sm font-semibold text-black/75">
+                                    {reply.authorName}
+                                  </p>
+                                  <p className="text-[11px] text-black/50">
+                                    {formatCommentDate(reply.createdAt)}
+                                  </p>
+                                </div>
+                                <p className="mt-1 whitespace-pre-wrap text-sm text-black/70">
+                                  {reply.body}
+                                </p>
+                              </div>
+                            ))}
+                        </div>
+                      ) : null}
+                      {!isResolved && !isEditing && replyingToCommentId === comment.id ? (
+                        <div className="mt-2 rounded-xl bg-white/70 p-2.5">
+                          <textarea
+                            value={replyDraft}
+                            onChange={(event) => setReplyDraft(event.target.value)}
+                            className="h-10 w-full resize-none rounded-full border border-[#1a73e8] bg-white px-4 py-2 text-sm outline-none focus:border-[#1a73e8]"
+                            placeholder="Write a reply..."
+                          />
+                          <div className="mt-2 flex items-center justify-end gap-2">
+                            <button
+                              type="button"
                               onClick={() => {
-                                setReplyingToCommentId(comment.id);
+                                setReplyingToCommentId(null);
                                 setReplyDraft("");
                               }}
-                              disabled={isResolved || isEditing}
+                              className="rounded-full px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => submitReply(comment.id)}
+                              disabled={!replyDraft.trim()}
                               className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
                             >
                               Reply
                             </button>
                           </div>
-                          {isResolved ? (
-                            <p className="mt-2 text-sm text-black/55">
-                              Thread resolved
-                            </p>
-                          ) : null}
-                          {!isResolved && (comment.replies?.length ?? 0) > 0 ? (
-                            <div className="mt-2 space-y-2 pl-3">
-                              {comment.replies
-                                .slice()
-                                .sort((a, b) => a.createdAt - b.createdAt)
-                                .map((reply) => (
-                                  <div
-                                    key={reply.id}
-                                    className="rounded-xl bg-white/70 px-3 py-2"
-                                  >
-                                    <div className="flex items-center justify-between gap-2">
-                                      <p className="truncate text-sm font-semibold text-black/75">
-                                        {reply.authorName}
-                                      </p>
-                                      <p className="text-[11px] text-black/50">
-                                        {formatCommentDate(reply.createdAt)}
-                                      </p>
-                                    </div>
-                                    <p className="mt-1 whitespace-pre-wrap text-sm text-black/70">
-                                      {reply.body}
-                                    </p>
-                                  </div>
-                                ))}
-                            </div>
-                          ) : null}
-                          {!isResolved && !isEditing && replyingToCommentId === comment.id ? (
-                            <div className="mt-2 rounded-xl bg-white/70 p-2.5">
-                              <textarea
-                                value={replyDraft}
-                                onChange={(event) => setReplyDraft(event.target.value)}
-                                className="h-10 w-full resize-none rounded-full border border-[#1a73e8] bg-white px-4 py-2 text-sm outline-none focus:border-[#1a73e8]"
-                                placeholder="Write a reply..."
-                              />
-                              <div className="mt-2 flex items-center justify-end gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setReplyingToCommentId(null);
-                                    setReplyDraft("");
-                                  }}
-                                  className="rounded-full px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => submitReply(comment.id)}
-                                  disabled={!replyDraft.trim()}
-                                  className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
-                                >
-                                  Reply
-                                </button>
-                              </div>
-                            </div>
-                          ) : null}
-                        </article>
-                      );
-                    })}
-                </div>
-              </aside>
-            ) : null}
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })
+              : null}
           </div>
         </div>
       )}
