@@ -2,72 +2,14 @@
 
 import { getCursor, getCursorPosition } from "@automerge/automerge";
 import type { Cursor } from "@automerge/automerge";
-import { useDocument, useDocuments, useRepo } from "@automerge/automerge-repo-react-hooks";
+import { useDocument, useRepo } from "@automerge/automerge-repo-react-hooks";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
 import { EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
 import { Decoration, EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import type { DocumentIndexDoc, MarkdownDoc } from "@/lib/types";
-
-const DICEWARE_WORDS = [
-  "amber",
-  "anchor",
-  "apricot",
-  "badger",
-  "barn",
-  "beacon",
-  "birch",
-  "breeze",
-  "cabin",
-  "cedar",
-  "cinder",
-  "cliff",
-  "coral",
-  "dawn",
-  "delta",
-  "dune",
-  "ember",
-  "fern",
-  "fjord",
-  "flint",
-  "frost",
-  "glade",
-  "grove",
-  "harbor",
-  "hazel",
-  "hearth",
-  "hollow",
-  "ivory",
-  "juniper",
-  "lagoon",
-  "lumen",
-  "maple",
-  "meadow",
-  "mistral",
-  "north",
-  "opal",
-  "orchid",
-  "pebble",
-  "pine",
-  "prairie",
-  "quartz",
-  "raven",
-  "reef",
-  "river",
-  "saffron",
-  "shore",
-  "spruce",
-  "summit",
-  "thistle",
-  "timber",
-  "topaz",
-  "valley",
-  "violet",
-  "willow",
-  "winter",
-];
 
 interface EditorShellProps {
   user: {
@@ -76,6 +18,7 @@ interface EditorShellProps {
     email: string;
     image: string | null;
   };
+  docUrl: AutomergeUrl;
 }
 
 interface PendingComment {
@@ -83,6 +26,11 @@ interface PendingComment {
   anchorEnd: number;
   selectedText: string;
   body: string;
+}
+
+interface FloatingCommentButtonPosition {
+  top: number;
+  left: number;
 }
 
 const setCommentHighlightsEffect = StateEffect.define<readonly { from: number; to: number }[]>();
@@ -133,16 +81,6 @@ const editorTheme = EditorView.theme({
   },
 });
 
-function randomInt(max: number): number {
-  const bytes = new Uint32Array(1);
-  crypto.getRandomValues(bytes);
-  return bytes[0] % max;
-}
-
-function generateDicewareTitle(): string {
-  return `${DICEWARE_WORDS[randomInt(DICEWARE_WORDS.length)]} ${DICEWARE_WORDS[randomInt(DICEWARE_WORDS.length)]} ${DICEWARE_WORDS[randomInt(DICEWARE_WORDS.length)]}`;
-}
-
 function avatarFallback(name: string, email: string): string {
   const source = name.trim() || email.trim() || "U";
   return source.slice(0, 1).toUpperCase();
@@ -164,10 +102,8 @@ function formatCommentDate(timestamp: number): string {
   }).format(new Date(timestamp));
 }
 
-export function EditorShell({ user }: EditorShellProps) {
+export function EditorShell({ user, docUrl }: EditorShellProps) {
   const repo = useRepo();
-  const router = useRouter();
-  const searchParams = useSearchParams();
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const [selectionRange, setSelectionRange] = useState({ start: 0, end: 0 });
@@ -177,49 +113,35 @@ export function EditorShell({ user }: EditorShellProps) {
   const [replyDraft, setReplyDraft] = useState("");
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentDraft, setEditingCommentDraft] = useState("");
+  const [openCommentMenuId, setOpenCommentMenuId] = useState<string | null>(null);
+  const [floatingCommentButtonPosition, setFloatingCommentButtonPosition] =
+    useState<FloatingCommentButtonPosition | null>(null);
   const [commentHighlightRange, setCommentHighlightRange] = useState<{
     start: number;
     end: number;
   } | null>(null);
 
-  const docParam = searchParams.get("doc");
-  const activeDocUrl = (docParam ?? undefined) as AutomergeUrl | undefined;
-  const indexParam = searchParams.get("index");
-  const indexUrl = (indexParam ?? undefined) as AutomergeUrl | undefined;
-
+  const activeDocUrl = docUrl;
   const indexStorageKey = `md-editor:index-url:${user.id}`;
+  const [indexUrl, setIndexUrl] = useState<AutomergeUrl | undefined>(undefined);
 
   useEffect(() => {
-    if (indexUrl) {
-      return;
-    }
-
     const existingIndexUrl = window.localStorage.getItem(indexStorageKey) as
       | AutomergeUrl
       | null;
     if (existingIndexUrl) {
-      const docQuery = activeDocUrl
-        ? `&doc=${encodeURIComponent(activeDocUrl)}`
-        : "";
-      router.replace(`/editor?index=${encodeURIComponent(existingIndexUrl)}${docQuery}`);
+      setIndexUrl(existingIndexUrl);
       return;
     }
-
     const handle = repo.create<DocumentIndexDoc>({ documents: [] });
     window.localStorage.setItem(indexStorageKey, handle.url);
-    const docQuery = activeDocUrl ? `&doc=${encodeURIComponent(activeDocUrl)}` : "";
-    router.replace(`/editor?index=${encodeURIComponent(handle.url)}${docQuery}`);
-  }, [activeDocUrl, indexStorageKey, indexUrl, repo, router]);
+    setIndexUrl(handle.url);
+  }, [indexStorageKey, repo]);
 
   const [indexDoc, changeIndexDoc] = useDocument<DocumentIndexDoc>(indexUrl, {
     suspense: false,
   });
 
-  const documentUrls = useMemo(
-    () => (indexDoc?.documents ?? []).map((entry) => entry.url as AutomergeUrl),
-    [indexDoc],
-  );
-  const [documents] = useDocuments<MarkdownDoc>(documentUrls, { suspense: false });
   const [activeDoc, changeActiveDoc] = useDocument<MarkdownDoc>(activeDocUrl, {
     suspense: false,
   });
@@ -232,47 +154,21 @@ export function EditorShell({ user }: EditorShellProps) {
   }, [activeDocContent]);
 
   useEffect(() => {
-    if (!indexDoc || activeDocUrl) {
+    if (!indexDoc || !activeDocUrl) {
       return;
     }
-    const firstDoc = indexDoc.documents[0];
-    if (!firstDoc) {
+    const alreadyTracked = indexDoc.documents.some((entry) => entry.url === activeDocUrl);
+    if (alreadyTracked) {
       return;
     }
-    router.replace(
-      `/editor?index=${encodeURIComponent(indexUrl ?? "")}&doc=${encodeURIComponent(firstDoc.url)}`,
-    );
-  }, [activeDocUrl, indexDoc, indexUrl, router]);
-
-  const createDocument = () => {
-    if (!indexDoc) {
-      return;
-    }
-    const title = generateDicewareTitle();
-    const handle = repo.create<MarkdownDoc>({
-      title,
-      content: "",
-      comments: [],
-      cursors: {},
-    });
     changeIndexDoc((doc) => {
-      const alreadyExists = doc.documents.some((entry) => entry.url === handle.url);
-      if (!alreadyExists) {
-        doc.documents.push({
-          url: handle.url,
-          createdAt: Date.now(),
-          createdBy: user.id,
-        });
-      }
+      doc.documents.push({
+        url: activeDocUrl,
+        createdAt: Date.now(),
+        createdBy: user.id,
+      });
     });
-    router.push(
-      `/editor?index=${encodeURIComponent(indexUrl ?? "")}&doc=${encodeURIComponent(handle.url)}`,
-    );
-  };
-
-  const openDocument = (url: string) => {
-    router.push(`/editor?index=${encodeURIComponent(indexUrl ?? "")}&doc=${encodeURIComponent(url)}`);
-  };
+  }, [activeDocUrl, changeIndexDoc, indexDoc, user.id]);
 
   const updateLocalSelection = useCallback(
     (start: number, end: number) => {
@@ -439,6 +335,80 @@ export function EditorShell({ user }: EditorShellProps) {
     [],
   );
 
+  const updateFloatingCommentButtonPosition = useCallback(() => {
+    if (!hasSelection || pendingComment) {
+      setFloatingCommentButtonPosition(null);
+      return;
+    }
+    const view = editorViewRef.current;
+    const host = editorHostRef.current;
+    if (!view || !host) {
+      setFloatingCommentButtonPosition(null);
+      return;
+    }
+
+    const docLength = view.state.doc.length;
+    const start = Math.max(0, Math.min(orderedSelection.start, docLength));
+    const end = Math.max(start, Math.min(orderedSelection.end, docLength));
+    if (end <= start) {
+      setFloatingCommentButtonPosition(null);
+      return;
+    }
+
+    const startCoords = view.coordsAtPos(start);
+    const endCoords = view.coordsAtPos(end) ?? view.coordsAtPos(Math.max(start, end - 1));
+    if (!startCoords || !endCoords) {
+      setFloatingCommentButtonPosition(null);
+      return;
+    }
+
+    const hostRect = host.getBoundingClientRect();
+    const buttonSize = 40;
+    const gap = 8;
+    const rawTop = Math.min(startCoords.top, endCoords.top) - hostRect.top - buttonSize - gap;
+    const rawLeft = Math.max(startCoords.right, endCoords.right) - hostRect.left + gap;
+
+    const clampedTop = Math.min(
+      Math.max(rawTop, gap),
+      Math.max(gap, hostRect.height - buttonSize - gap),
+    );
+    const clampedLeft = Math.min(
+      Math.max(rawLeft, gap),
+      Math.max(gap, hostRect.width - buttonSize - gap),
+    );
+
+    setFloatingCommentButtonPosition({
+      top: clampedTop,
+      left: clampedLeft,
+    });
+  }, [hasSelection, orderedSelection.end, orderedSelection.start, pendingComment]);
+
+  useEffect(() => {
+    updateFloatingCommentButtonPosition();
+  }, [updateFloatingCommentButtonPosition, activeDocContent]);
+
+  useEffect(() => {
+    const host = editorHostRef.current;
+    if (!host) {
+      return;
+    }
+    const scroller = host.querySelector(".cm-scroller");
+    if (!scroller) {
+      return;
+    }
+
+    const handleReposition = () => {
+      updateFloatingCommentButtonPosition();
+    };
+
+    scroller.addEventListener("scroll", handleReposition);
+    window.addEventListener("resize", handleReposition);
+    return () => {
+      scroller.removeEventListener("scroll", handleReposition);
+      window.removeEventListener("resize", handleReposition);
+    };
+  }, [activeDocUrl, updateFloatingCommentButtonPosition]);
+
   useEffect(() => {
     const view = editorViewRef.current;
     if (!view) {
@@ -559,6 +529,7 @@ export function EditorShell({ user }: EditorShellProps) {
     if (authorId !== user.id) {
       return;
     }
+    setOpenCommentMenuId(null);
     setEditingCommentId(commentId);
     setEditingCommentDraft(currentBody);
   };
@@ -625,7 +596,27 @@ export function EditorShell({ user }: EditorShellProps) {
       setEditingCommentId(null);
       setEditingCommentDraft("");
     }
+    if (openCommentMenuId === commentId) {
+      setOpenCommentMenuId(null);
+    }
   };
+
+  useEffect(() => {
+    if (!openCommentMenuId) {
+      return;
+    }
+    const handleMouseDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-comment-menu-root='true']")) {
+        return;
+      }
+      setOpenCommentMenuId(null);
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+    };
+  }, [openCommentMenuId]);
 
   const collaboratorCursors = useMemo(() => {
     if (!activeDoc?.cursors) {
@@ -659,406 +650,389 @@ export function EditorShell({ user }: EditorShellProps) {
   }, [activeDoc, user.id]);
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      <aside className="w-80 border-r border-black/10 bg-black/[0.03] p-4">
-        <div className="mb-6 flex items-center gap-3 rounded-lg border border-black/10 bg-background p-3">
-          {user.image ? (
-            <img
-              src={user.image}
-              alt={user.name}
-              className="h-10 w-10 rounded-full object-cover"
-            />
-          ) : (
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-black/10 text-sm font-semibold">
-              {avatarFallback(user.name, user.email)}
-            </div>
-          )}
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">{user.name}</p>
-            <p className="truncate text-xs text-black/60">{user.email}</p>
-          </div>
+    <div className="min-h-screen bg-background text-foreground p-8">
+      {!activeDoc ? (
+        <div className="rounded-lg border border-dashed border-black/20 p-8 text-sm text-black/70">
+          Loading document...
         </div>
-
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold tracking-wide">Documents</h2>
-          <button
-            type="button"
-            onClick={createDocument}
-            disabled={!indexDoc}
-            className="rounded-md bg-black px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            New
-          </button>
-        </div>
-
-        <div className="space-y-1">
-          {(indexDoc?.documents ?? []).map((entry) => {
-            const doc = documents.get(entry.url as AutomergeUrl);
-            const isActive = activeDocUrl === entry.url;
-            return (
-              <button
-                type="button"
-                key={entry.url}
-                onClick={() => openDocument(entry.url)}
-                className={`block w-full rounded-md border px-3 py-2 text-left text-sm transition ${
-                  isActive
-                    ? "border-black/30 bg-white"
-                    : "border-transparent hover:border-black/10 hover:bg-white/70"
-                }`}
-              >
-                <p className="truncate font-medium">{doc?.title ?? "Untitled"}</p>
-                <p className="truncate text-xs text-black/60">{entry.url}</p>
-              </button>
-            );
-          })}
-        </div>
-      </aside>
-
-      <main className="flex-1 p-8">
-        {!activeDoc ? (
-          <div className="rounded-lg border border-dashed border-black/20 p-8 text-sm text-black/70">
-            Pick a document from the sidebar or create a new one.
-          </div>
-        ) : (
-          <div className="w-full space-y-4">
-            <div
-              className={`flex gap-6 ${
-                hasCommentMargin ? "flex-col lg:flex-row lg:items-start" : ""
-              }`}
+      ) : (
+        <div className="w-full space-y-4">
+          <header className="flex items-center justify-between gap-4">
+            <Link
+              href="/editor"
+              className="rounded-md border border-black/15 bg-white px-3 py-2 text-sm font-medium transition hover:bg-black/5"
             >
-              <section className={`${hasCommentMargin ? "min-w-0 flex-1" : "w-full"}`}>
-                <div className="space-y-4">
-                  <input
-                    type="text"
-                    value={activeDoc.title}
-                    onChange={(event) =>
-                      changeActiveDoc((doc) => {
-                        doc.title = event.target.value;
-                      })
-                    }
-                    className="w-full rounded-lg border border-black/15 bg-white px-4 py-3 text-2xl font-semibold outline-none focus:border-black/40"
-                    placeholder="Document title"
-                  />
+              Documents
+            </Link>
+            <div className="flex min-w-0 items-center gap-3 rounded-lg border border-black/10 bg-white px-3 py-2">
+              {user.image ? (
+                <img
+                  src={user.image}
+                  alt={user.name}
+                  className="h-8 w-8 rounded-full object-cover"
+                />
+              ) : (
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold">
+                  {avatarFallback(user.name, user.email)}
+                </div>
+              )}
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{user.name}</p>
+                <p className="truncate text-xs text-black/60">{user.email}</p>
+              </div>
+            </div>
+          </header>
 
-                  {collaboratorCursors.length > 0 ? (
-                    <div className="rounded-lg border border-black/10 bg-white p-3 text-xs">
-                      <p className="mb-2 font-semibold text-black/70">Collaborators</p>
-                      <div className="space-y-1">
-                        {collaboratorCursors.map((entry) => (
-                          <p key={entry.userId} className="truncate text-black/70">
-                            {entry.displayName} at{" "}
-                            {toLineAndColumn(activeDoc.content ?? "", entry.startIndex)}
-                            {entry.startIndex !== entry.endIndex
-                              ? ` - ${toLineAndColumn(activeDoc.content ?? "", entry.endIndex)}`
-                              : ""}
-                          </p>
-                        ))}
+          <div
+            className={`flex gap-6 ${
+              hasCommentMargin ? "flex-col lg:flex-row lg:items-start" : ""
+            }`}
+          >
+            <section className={`${hasCommentMargin ? "min-w-0 flex-1" : "w-full"}`}>
+              <div className="space-y-4">
+                <input
+                  type="text"
+                  value={activeDoc.title}
+                  onChange={(event) =>
+                    changeActiveDoc((doc) => {
+                      doc.title = event.target.value;
+                    })
+                  }
+                  className="w-full rounded-lg border border-black/15 bg-white px-4 py-3 text-2xl font-semibold outline-none focus:border-black/40"
+                  placeholder="Document title"
+                />
+
+                {collaboratorCursors.length > 0 ? (
+                  <div className="rounded-lg border border-black/10 bg-white p-3 text-xs">
+                    <p className="mb-2 font-semibold text-black/70">Collaborators</p>
+                    <div className="space-y-1">
+                      {collaboratorCursors.map((entry) => (
+                        <p key={entry.userId} className="truncate text-black/70">
+                          {entry.displayName} at{" "}
+                          {toLineAndColumn(activeDoc.content ?? "", entry.startIndex)}
+                          {entry.startIndex !== entry.endIndex
+                            ? ` - ${toLineAndColumn(activeDoc.content ?? "", entry.endIndex)}`
+                            : ""}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="relative">
+                  {hasSelection && !pendingComment && floatingCommentButtonPosition ? (
+                    <div
+                      className="absolute z-20"
+                      style={{
+                        top: floatingCommentButtonPosition.top,
+                        left: floatingCommentButtonPosition.left,
+                      }}
+                    >
+                      <div className="flex flex-col overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_4px_14px_rgba(0,0,0,0.16)]">
+                        <button
+                          type="button"
+                          onClick={openPendingComment}
+                          aria-label="Add comment"
+                          className="flex h-10 w-10 items-center justify-center border-b border-black/10 text-lg font-semibold leading-none text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                        >
+                          +
+                        </button>
                       </div>
                     </div>
                   ) : null}
 
-                  <div className="relative">
-                    {hasSelection && !pendingComment ? (
-                      <div className="absolute -right-14 top-10 z-20 hidden lg:block">
-                        <div className="flex flex-col overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_4px_14px_rgba(0,0,0,0.16)]">
-                          <button
-                            type="button"
-                            onClick={openPendingComment}
-                            aria-label="Add comment"
-                            className="flex h-10 w-10 items-center justify-center border-b border-black/10 text-lg font-semibold leading-none text-[#0b57d0] transition hover:bg-[#e8f0fe]"
-                          >
-                            +
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div
-                      ref={editorHostRef}
-                      className="h-[70vh] w-full rounded-lg border border-black/15 bg-white"
-                    />
-                  </div>
+                  <div
+                    ref={editorHostRef}
+                    className="h-[70vh] w-full rounded-lg border border-black/15 bg-white"
+                  />
                 </div>
-              </section>
+              </div>
+            </section>
 
-              {hasCommentMargin ? (
-                <aside className="w-full shrink-0 space-y-3 lg:sticky lg:top-8 lg:w-[420px]">
-                  {pendingComment ? (
-                    <article className="rounded-2xl border border-black/10 bg-white p-4 shadow-[0_6px_20px_rgba(0,0,0,0.14)]">
-                      <div className="mb-3 flex items-center gap-2">
-                        {user.image ? (
-                          <img
-                            src={user.image}
-                            alt={user.name}
-                            className="h-8 w-8 rounded-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold">
-                            {avatarFallback(user.name, user.email)}
-                          </div>
-                        )}
-                        <p className="truncate text-xl font-medium leading-6">{user.name}</p>
-                      </div>
+            {hasCommentMargin ? (
+              <aside className="w-full shrink-0 space-y-3 lg:sticky lg:top-8 lg:w-[420px]">
+                {pendingComment ? (
+                  <article className="rounded-2xl border border-black/10 bg-white p-4 shadow-[0_6px_20px_rgba(0,0,0,0.14)]">
+                    <div className="mb-3 flex items-center gap-2">
+                      {user.image ? (
+                        <img
+                          src={user.image}
+                          alt={user.name}
+                          className="h-8 w-8 rounded-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold">
+                          {avatarFallback(user.name, user.email)}
+                        </div>
+                      )}
+                      <p className="truncate text-xl font-medium leading-6">{user.name}</p>
+                    </div>
 
-                      <textarea
-                        value={pendingComment.body}
-                        onChange={(event) =>
-                          setPendingComment((current) =>
-                            current
-                              ? {
-                                  ...current,
-                                  body: event.target.value,
-                                }
-                              : current,
-                          )
-                        }
-                        className="h-11 w-full resize-none rounded-full border border-[#1a73e8] bg-white px-4 py-2 text-base leading-6 outline-none focus:border-[#1a73e8]"
-                        placeholder="Comment or add others with @"
-                      />
-                      <p className="mt-2 max-h-10 overflow-hidden text-xs text-black/55">
-                        {toLineAndColumn(activeDoc.content ?? "", pendingComment.anchorStart)}
-                        {" - "}
-                        {toLineAndColumn(activeDoc.content ?? "", pendingComment.anchorEnd)}
-                        {" · "}
-                        {pendingComment.selectedText}
-                      </p>
-                      <div className="mt-3 flex items-center justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setPendingComment(null)}
-                          className="rounded-full px-4 py-2 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          onClick={submitPendingComment}
-                          disabled={!pendingComment.body.trim()}
-                          className="rounded-full bg-[#1a73e8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
-                        >
-                          Submit
-                        </button>
-                      </div>
-                    </article>
-                  ) : null}
-
-                  {comments.length > 0 ? (
-                    <p className="px-1 text-xs font-semibold uppercase tracking-wide text-black/55">
-                      Comments ({comments.length})
-                    </p>
-                  ) : null}
-
-                  <div className="max-h-[78vh] space-y-2 overflow-y-auto pr-1">
-                    {comments
-                      .slice()
-                      .sort((a, b) => b.createdAt - a.createdAt)
-                      .map((comment) => {
-                        const isHovered = hoveredCommentId === comment.id;
-                        const isResolved = Boolean(comment.resolved);
-                        const isOwner = comment.authorId === user.id;
-                        const isEditing = editingCommentId === comment.id;
-                        return (
-                          <article
-                            key={comment.id}
-                            onMouseEnter={() => {
-                              setHoveredCommentId(comment.id);
-                              highlightRange(comment.anchorStart, comment.anchorEnd);
-                            }}
-                            onMouseLeave={() => {
-                              if (hoveredCommentId === comment.id) {
-                                setHoveredCommentId(null);
-                                setCommentHighlightRange(null);
+                    <textarea
+                      value={pendingComment.body}
+                      onChange={(event) =>
+                        setPendingComment((current) =>
+                          current
+                            ? {
+                                ...current,
+                                body: event.target.value,
                               }
-                            }}
-                            className={`group rounded-2xl p-4 transition ${
-                              isHovered
-                                ? "bg-[#dce3ef] shadow-[0_8px_20px_rgba(0,0,0,0.14)]"
-                                : isResolved
-                                  ? "bg-[#ecf0f6]"
-                                  : "bg-[#e5ebf4]"
-                            }`}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="flex min-w-0 items-start gap-3">
-                                {comment.authorId === user.id && user.image ? (
-                                  <img
-                                    src={user.image}
-                                    alt={comment.authorName}
-                                    className="mt-0.5 h-8 w-8 rounded-full object-cover"
-                                  />
-                                ) : (
-                                  <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold text-black/65">
-                                    {avatarFallback(comment.authorName, "")}
-                                  </div>
-                                )}
-                                <div className="min-w-0">
-                                  <p className="truncate text-base font-semibold leading-5 text-black/80">
-                                    {comment.authorName}
-                                  </p>
-                                  <p className="text-xs text-black/65">
-                                    {formatCommentDate(comment.createdAt)}
-                                  </p>
+                            : current,
+                        )
+                      }
+                      className="h-11 w-full resize-none rounded-full border border-[#1a73e8] bg-white px-4 py-2 text-base leading-6 outline-none focus:border-[#1a73e8]"
+                      placeholder="Comment or add others with @"
+                    />
+                    <div className="mt-3 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPendingComment(null)}
+                        className="rounded-full px-4 py-2 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={submitPendingComment}
+                        disabled={!pendingComment.body.trim()}
+                        className="rounded-full bg-[#1a73e8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                      >
+                        Submit
+                      </button>
+                    </div>
+                  </article>
+                ) : null}
+
+                {comments.length > 0 ? (
+                  <p className="px-1 text-xs font-semibold uppercase tracking-wide text-black/55">
+                    Comments ({comments.length})
+                  </p>
+                ) : null}
+
+                <div className="max-h-[78vh] space-y-2 overflow-y-auto pr-1">
+                  {comments
+                    .slice()
+                    .sort((a, b) => b.createdAt - a.createdAt)
+                    .map((comment) => {
+                      const isHovered = hoveredCommentId === comment.id;
+                      const isResolved = Boolean(comment.resolved);
+                      const isOwner = comment.authorId === user.id;
+                      const isEditing = editingCommentId === comment.id;
+                      return (
+                        <article
+                          key={comment.id}
+                          onMouseEnter={() => {
+                            setHoveredCommentId(comment.id);
+                            highlightRange(comment.anchorStart, comment.anchorEnd);
+                          }}
+                          onMouseLeave={() => {
+                            if (hoveredCommentId === comment.id) {
+                              setHoveredCommentId(null);
+                              setCommentHighlightRange(null);
+                            }
+                          }}
+                          className={`group rounded-2xl p-4 transition ${
+                            isHovered
+                              ? "bg-[#dce3ef] shadow-[0_8px_20px_rgba(0,0,0,0.14)]"
+                              : isResolved
+                                ? "bg-[#ecf0f6]"
+                                : "bg-[#e5ebf4]"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-start gap-3">
+                              {comment.authorId === user.id && user.image ? (
+                                <img
+                                  src={user.image}
+                                  alt={comment.authorName}
+                                  className="mt-0.5 h-8 w-8 rounded-full object-cover"
+                                />
+                              ) : (
+                                <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold text-black/65">
+                                  {avatarFallback(comment.authorName, "")}
                                 </div>
+                              )}
+                              <div className="min-w-0">
+                                <p className="truncate text-base font-semibold leading-5 text-black/80">
+                                  {comment.authorName}
+                                </p>
+                                <p className="text-xs text-black/65">
+                                  {formatCommentDate(comment.createdAt)}
+                                </p>
                               </div>
+                            </div>
+                            {isOwner ? (
                               <div
-                                className={`flex items-center gap-3 ${
-                                  isHovered ? "opacity-100" : "opacity-0"
+                                data-comment-menu-root="true"
+                                className={`relative flex items-center gap-3 ${
+                                  isHovered || openCommentMenuId === comment.id
+                                    ? "opacity-100"
+                                    : "opacity-0"
                                 } transition`}
                               >
                                 <button
                                   type="button"
                                   aria-label="Comment options"
-                                  className="text-lg leading-none text-black/60"
+                                  onClick={() =>
+                                    setOpenCommentMenuId((current) =>
+                                      current === comment.id ? null : comment.id,
+                                    )
+                                  }
+                                  className="rounded-md px-2 py-1 text-lg leading-none text-black/60 transition hover:bg-black/10"
                                 >
                                   ⋮
                                 </button>
-                              </div>
-                            </div>
-                            {isEditing ? (
-                              <div className="mt-2 rounded-xl bg-white/70 p-2.5">
-                                <textarea
-                                  value={editingCommentDraft}
-                                  onChange={(event) =>
-                                    setEditingCommentDraft(event.target.value)
-                                  }
-                                  className="h-16 w-full resize-y rounded-xl border border-[#1a73e8] bg-white px-3 py-2 text-sm outline-none focus:border-[#1a73e8]"
-                                  placeholder="Edit your comment..."
-                                />
-                                <div className="mt-2 flex items-center justify-end gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={cancelEditingComment}
-                                    className="rounded-full px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
-                                  >
-                                    Cancel
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => saveEditedComment(comment.id)}
-                                    disabled={!editingCommentDraft.trim()}
-                                    className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
-                                  >
-                                    Save
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className={`mt-2 rounded-xl px-3 py-2 ${isHovered ? "bg-[#c9d1df]" : ""}`}>
-                                <p className="whitespace-pre-wrap text-base leading-6 text-black/70">
-                                  {comment.body}
-                                </p>
-                              </div>
-                            )}
-                            <div className="mt-2 flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => toggleResolved(comment.id)}
-                                className="rounded-full border border-[#0b57d0]/30 bg-white px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
-                              >
-                                {isResolved ? "Re-open" : "Resolve"}
-                              </button>
-                              {isOwner ? (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    startEditingComment(comment.id, comment.body, comment.authorId)
-                                  }
-                                  className="rounded-full border border-black/20 bg-white px-3 py-1.5 text-sm font-medium text-black/75 transition hover:bg-black/5"
-                                >
-                                  Edit
-                                </button>
-                              ) : null}
-                              {isOwner ? (
-                                <button
-                                  type="button"
-                                  onClick={() => deleteComment(comment.id, comment.authorId)}
-                                  className="rounded-full border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-600 transition hover:bg-red-50"
-                                >
-                                  Delete
-                                </button>
-                              ) : null}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setReplyingToCommentId(comment.id);
-                                  setReplyDraft("");
-                                }}
-                                disabled={isResolved || isEditing}
-                                className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
-                              >
-                                Reply
-                              </button>
-                            </div>
-                            {isResolved ? (
-                              <p className="mt-2 text-sm text-black/55">
-                                Thread resolved
-                              </p>
-                            ) : null}
-                            {!isResolved && (comment.replies?.length ?? 0) > 0 ? (
-                              <div className="mt-2 space-y-2 pl-3">
-                                {comment.replies
-                                  .slice()
-                                  .sort((a, b) => a.createdAt - b.createdAt)
-                                  .map((reply) => (
-                                    <div
-                                      key={reply.id}
-                                      className="rounded-xl bg-white/70 px-3 py-2"
+                                {openCommentMenuId === comment.id ? (
+                                  <div className="absolute right-0 top-8 z-20 w-28 rounded-lg border border-black/10 bg-white p-1 shadow-[0_8px_20px_rgba(0,0,0,0.14)]">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        startEditingComment(
+                                          comment.id,
+                                          comment.body,
+                                          comment.authorId,
+                                        )
+                                      }
+                                      className="block w-full rounded-md px-3 py-2 text-left text-sm text-black/80 transition hover:bg-black/5"
                                     >
-                                      <div className="flex items-center justify-between gap-2">
-                                        <p className="truncate text-sm font-semibold text-black/75">
-                                          {reply.authorName}
-                                        </p>
-                                        <p className="text-[11px] text-black/50">
-                                          {formatCommentDate(reply.createdAt)}
-                                        </p>
-                                      </div>
-                                      <p className="mt-1 whitespace-pre-wrap text-sm text-black/70">
-                                        {reply.body}
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => deleteComment(comment.id, comment.authorId)}
+                                      className="block w-full rounded-md px-3 py-2 text-left text-sm text-red-600 transition hover:bg-red-50"
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                          {isEditing ? (
+                            <div className="mt-2 rounded-xl bg-white/70 p-2.5">
+                              <textarea
+                                value={editingCommentDraft}
+                                onChange={(event) =>
+                                  setEditingCommentDraft(event.target.value)
+                                }
+                                className="h-16 w-full resize-y rounded-xl border border-[#1a73e8] bg-white px-3 py-2 text-sm outline-none focus:border-[#1a73e8]"
+                                placeholder="Edit your comment..."
+                              />
+                              <div className="mt-2 flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={cancelEditingComment}
+                                  className="rounded-full px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => saveEditedComment(comment.id)}
+                                  disabled={!editingCommentDraft.trim()}
+                                  className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className={`mt-2 rounded-xl px-3 py-2 ${isHovered ? "bg-[#c9d1df]" : ""}`}>
+                              <p className="whitespace-pre-wrap text-base leading-6 text-black/70">
+                                {comment.body}
+                              </p>
+                            </div>
+                          )}
+                          <div className="mt-2 flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => toggleResolved(comment.id)}
+                              className="rounded-full border border-[#0b57d0]/30 bg-white px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                            >
+                              {isResolved ? "Re-open" : "Resolve"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReplyingToCommentId(comment.id);
+                                setReplyDraft("");
+                              }}
+                              disabled={isResolved || isEditing}
+                              className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                            >
+                              Reply
+                            </button>
+                          </div>
+                          {isResolved ? (
+                            <p className="mt-2 text-sm text-black/55">
+                              Thread resolved
+                            </p>
+                          ) : null}
+                          {!isResolved && (comment.replies?.length ?? 0) > 0 ? (
+                            <div className="mt-2 space-y-2 pl-3">
+                              {comment.replies
+                                .slice()
+                                .sort((a, b) => a.createdAt - b.createdAt)
+                                .map((reply) => (
+                                  <div
+                                    key={reply.id}
+                                    className="rounded-xl bg-white/70 px-3 py-2"
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <p className="truncate text-sm font-semibold text-black/75">
+                                        {reply.authorName}
+                                      </p>
+                                      <p className="text-[11px] text-black/50">
+                                        {formatCommentDate(reply.createdAt)}
                                       </p>
                                     </div>
-                                  ))}
+                                    <p className="mt-1 whitespace-pre-wrap text-sm text-black/70">
+                                      {reply.body}
+                                    </p>
+                                  </div>
+                                ))}
+                            </div>
+                          ) : null}
+                          {!isResolved && !isEditing && replyingToCommentId === comment.id ? (
+                            <div className="mt-2 rounded-xl bg-white/70 p-2.5">
+                              <textarea
+                                value={replyDraft}
+                                onChange={(event) => setReplyDraft(event.target.value)}
+                                className="h-10 w-full resize-none rounded-full border border-[#1a73e8] bg-white px-4 py-2 text-sm outline-none focus:border-[#1a73e8]"
+                                placeholder="Write a reply..."
+                              />
+                              <div className="mt-2 flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setReplyingToCommentId(null);
+                                    setReplyDraft("");
+                                  }}
+                                  className="rounded-full px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => submitReply(comment.id)}
+                                  disabled={!replyDraft.trim()}
+                                  className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                                >
+                                  Reply
+                                </button>
                               </div>
-                            ) : null}
-                            {!isResolved && !isEditing && replyingToCommentId === comment.id ? (
-                              <div className="mt-2 rounded-xl bg-white/70 p-2.5">
-                                <textarea
-                                  value={replyDraft}
-                                  onChange={(event) => setReplyDraft(event.target.value)}
-                                  className="h-10 w-full resize-none rounded-full border border-[#1a73e8] bg-white px-4 py-2 text-sm outline-none focus:border-[#1a73e8]"
-                                  placeholder="Write a reply..."
-                                />
-                                <div className="mt-2 flex items-center justify-end gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setReplyingToCommentId(null);
-                                      setReplyDraft("");
-                                    }}
-                                    className="rounded-full px-3 py-1.5 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
-                                  >
-                                    Cancel
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => submitReply(comment.id)}
-                                    disabled={!replyDraft.trim()}
-                                    className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
-                                  >
-                                    Reply
-                                  </button>
-                                </div>
-                              </div>
-                            ) : null}
-                          </article>
-                        );
-                      })}
-                  </div>
-                </aside>
-              ) : null}
-            </div>
+                            </div>
+                          ) : null}
+                        </article>
+                      );
+                    })}
+                </div>
+              </aside>
+            ) : null}
           </div>
-        )}
-      </main>
+        </div>
+      )}
     </div>
   );
 }
