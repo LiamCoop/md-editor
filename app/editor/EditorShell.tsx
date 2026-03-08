@@ -8,8 +8,8 @@ import { EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirr
 import { markdown } from "@codemirror/lang-markdown";
 import { Decoration, EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import type { DocumentIndexDoc, MarkdownDoc } from "@/lib/types";
+import { EditorHeader } from "./EditorHeader";
 
 interface EditorShellProps {
   user: {
@@ -117,11 +117,6 @@ const editorTheme = EditorView.theme({
   },
 });
 
-function avatarFallback(name: string, email: string): string {
-  const source = name.trim() || email.trim() || "U";
-  return source.slice(0, 1).toUpperCase();
-}
-
 function toLineAndColumn(text: string, index: number): string {
   const clamped = Math.max(0, Math.min(index, text.length));
   const prefix = text.slice(0, clamped);
@@ -129,6 +124,11 @@ function toLineAndColumn(text: string, index: number): string {
   const lastBreak = prefix.lastIndexOf("\n");
   const column = clamped - (lastBreak + 1) + 1;
   return `L${line}:C${column}`;
+}
+
+function avatarFallback(name: string, email: string): string {
+  const source = name.trim() || email.trim() || "U";
+  return source.slice(0, 1).toUpperCase();
 }
 
 function formatCommentDate(timestamp: number): string {
@@ -798,54 +798,30 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
   }, [activeDoc, user.id]);
 
   return (
-    <div className="min-h-screen bg-background text-foreground p-8">
+    <div className="min-h-screen bg-background text-foreground">
       {!activeDoc ? (
-        <div className="rounded-lg border border-dashed border-black/20 p-8 text-sm text-black/70">
-          Loading document...
+        <div className="p-8">
+          <div className="rounded-lg border border-dashed border-black/20 p-8 text-sm text-black/70">
+            Loading document...
+          </div>
         </div>
       ) : (
-        <div className="mx-auto w-full max-w-[1320px] space-y-4">
-          <header className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex min-w-0 flex-1 items-center gap-3">
-              <Link
-                href="/editor"
-                className="rounded-md border border-black/15 bg-white px-3 py-2 text-sm font-medium transition hover:bg-black/5"
-              >
-                Documents
-              </Link>
-              <input
-                type="text"
-                value={activeDoc.title}
-                onChange={(event) =>
-                  changeActiveDoc((doc) => {
-                    doc.title = event.target.value;
-                  })
-                }
-                className="w-full max-w-2xl rounded-lg border border-black/15 bg-white px-4 py-2 text-xl font-semibold outline-none focus:border-black/40"
-                placeholder="Document title"
-              />
-            </div>
-            <div className="flex min-w-0 items-center gap-3 rounded-lg border border-black/10 bg-white px-3 py-2">
-              {user.image ? (
-                <img
-                  src={user.image}
-                  alt={user.name}
-                  className="h-8 w-8 rounded-full object-cover"
-                />
-              ) : (
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold">
-                  {avatarFallback(user.name, user.email)}
-                </div>
-              )}
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold">{user.name}</p>
-                <p className="truncate text-xs text-black/60">{user.email}</p>
-              </div>
-            </div>
-          </header>
+        <>
+          <div className="w-full border-b border-black/10 bg-background px-6 py-4">
+            <EditorHeader
+              title={activeDoc.title}
+              onTitleChange={(nextTitle) =>
+                changeActiveDoc((doc) => {
+                  doc.title = nextTitle;
+                })
+              }
+              user={user}
+            />
+          </div>
 
-          {collaboratorCursors.length > 0 ? (
-            <div className="max-w-4xl rounded-lg border border-black/10 bg-white p-3 text-xs">
+          <div className="mx-auto w-full max-w-[1320px] space-y-4 px-6 pt-4">
+            {collaboratorCursors.length > 0 ? (
+              <div className="rounded-lg border border-black/10 bg-white p-3 text-xs">
               <p className="mb-2 font-semibold text-black/70">Collaborators</p>
               <div className="space-y-1">
                 {collaboratorCursors.map((entry) => (
@@ -858,46 +834,46 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
                   </p>
                 ))}
               </div>
-            </div>
-          ) : null}
-
-          <div className="relative pb-12">
-            <div className="max-w-4xl">
-              <div className="relative">
-                {hasSelection && !pendingComment && floatingCommentButtonPosition ? (
-                  <div
-                    className="absolute z-20"
-                    style={{
-                      top: floatingCommentButtonPosition.top,
-                      left: floatingCommentButtonPosition.left,
-                    }}
-                  >
-                    <div className="flex flex-col overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_4px_14px_rgba(0,0,0,0.16)]">
-                      <button
-                        type="button"
-                        onClick={openPendingComment}
-                        aria-label="Add comment"
-                        className="flex h-10 w-10 items-center justify-center border-b border-black/10 text-lg font-semibold leading-none text-[#0b57d0] transition hover:bg-[#e8f0fe]"
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                <div
-                  ref={editorHostRef}
-                  className="w-full rounded-lg border border-black/15 bg-white"
-                />
               </div>
+            ) : null}
+
+            <div className="flex items-start gap-3 pb-12">
+              <div className="relative w-full min-w-0 flex-[3]">
+              {hasSelection && !pendingComment && floatingCommentButtonPosition ? (
+                <div
+                  className="absolute z-20"
+                  style={{
+                    top: floatingCommentButtonPosition.top,
+                    left: floatingCommentButtonPosition.left,
+                  }}
+                >
+                  <div className="flex flex-col overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_4px_14px_rgba(0,0,0,0.16)]">
+                    <button
+                      type="button"
+                      onClick={openPendingComment}
+                      aria-label="Add comment"
+                      className="flex h-10 w-10 items-center justify-center border-b border-black/10 text-lg font-semibold leading-none text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              <div
+                ref={editorHostRef}
+                className="w-full rounded-lg border border-black/15 bg-white"
+              />
             </div>
 
-            {pendingComment && pendingCommentTop !== null ? (
-              <article
-                ref={pendingCommentRef}
-                className="absolute right-0 z-10 w-[320px] rounded-2xl border border-black/10 bg-white p-4 shadow-[0_6px_20px_rgba(0,0,0,0.14)]"
-                style={{ top: pendingCommentTop }}
-              >
+              <aside className="relative min-h-[70vh] min-w-[240px] max-w-[320px] flex-[1]">
+
+              {pendingComment && pendingCommentTop !== null ? (
+                <article
+                  ref={pendingCommentRef}
+                  className="absolute left-0 right-0 z-10 rounded-2xl border border-black/10 bg-white p-4 shadow-[0_6px_20px_rgba(0,0,0,0.14)]"
+                  style={{ top: pendingCommentTop }}
+                >
                 <div className="mb-3 flex items-center gap-2">
                   {user.image ? (
                     <img
@@ -928,28 +904,28 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
                   className="h-11 w-full resize-none rounded-full border border-[#1a73e8] bg-white px-4 py-2 text-base leading-6 outline-none focus:border-[#1a73e8]"
                   placeholder="Comment or add others with @"
                 />
-                <div className="mt-3 flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPendingComment(null)}
-                    className="rounded-full px-4 py-2 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={submitPendingComment}
-                    disabled={!pendingComment.body.trim()}
-                    className="rounded-full bg-[#1a73e8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
-                  >
-                    Submit
-                  </button>
-                </div>
-              </article>
-            ) : null}
+                  <div className="mt-3 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPendingComment(null)}
+                      className="rounded-full px-4 py-2 text-sm font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={submitPendingComment}
+                      disabled={!pendingComment.body.trim()}
+                      className="rounded-full bg-[#1a73e8] px-5 py-2 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                    >
+                      Submit
+                    </button>
+                  </div>
+                </article>
+              ) : null}
 
-            {hasComments
-              ? comments.map((comment) => {
+              {hasComments
+                ? comments.map((comment) => {
                   const isHovered = hoveredCommentId === comment.id;
                   const isResolved = Boolean(comment.resolved);
                   const isOwner = comment.authorId === user.id;
@@ -974,7 +950,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
                           setCommentHighlightRange(null);
                         }
                       }}
-                      className={`group absolute right-0 z-[5] w-[320px] rounded-2xl p-4 transition ${
+                      className={`group absolute left-0 right-0 z-[5] rounded-2xl p-4 transition ${
                         isHovered
                           ? "bg-[#dce3ef] shadow-[0_8px_20px_rgba(0,0,0,0.14)]"
                           : isResolved
@@ -1171,9 +1147,11 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
                     </article>
                   );
                 })
-              : null}
+                : null}
+              </aside>
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
