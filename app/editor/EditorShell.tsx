@@ -67,7 +67,9 @@ function areAnchoredPositionsEqual(
   return true;
 }
 
-const setCommentHighlightsEffect = StateEffect.define<readonly { from: number; to: number }[]>();
+const setCommentHighlightsEffect = StateEffect.define<
+  readonly { from: number; to: number; focused?: boolean }[]
+>();
 
 const commentHighlightsField = StateField.define({
   create() {
@@ -84,7 +86,15 @@ const commentHighlightsField = StateField.define({
         if (range.to <= range.from) {
           continue;
         }
-        builder.add(range.from, range.to, Decoration.mark({ class: "cm-comment-highlight" }));
+        builder.add(
+          range.from,
+          range.to,
+          Decoration.mark({
+            class: range.focused
+              ? "cm-comment-highlight cm-comment-highlight-active"
+              : "cm-comment-highlight",
+          }),
+        );
       }
       next = builder.finish();
     }
@@ -114,6 +124,9 @@ const editorTheme = EditorView.theme({
   },
   ".cm-comment-highlight": {
     backgroundColor: "#f6e8b1",
+  },
+  ".cm-comment-highlight-active": {
+    backgroundColor: "#f2d67a",
   },
 });
 
@@ -158,10 +171,6 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
     Record<string, AnchoredCommentPosition>
   >({});
   const [pendingCommentTop, setPendingCommentTop] = useState<number | null>(null);
-  const [commentHighlightRange, setCommentHighlightRange] = useState<{
-    start: number;
-    end: number;
-  } | null>(null);
 
   const activeDocUrl = docUrl;
   const indexStorageKey = `md-editor:index-url:${user.id}`;
@@ -359,23 +368,6 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
   const comments = activeDoc?.comments ?? [];
   const hasComments = comments.length > 0;
 
-  const highlightRange = useCallback(
-    (start: number, end: number) => {
-      const view = editorViewRef.current;
-      if (!view) {
-        return;
-      }
-      const from = Math.max(0, Math.min(start, end));
-      const to = Math.max(0, Math.max(start, end));
-      const docLength = view.state.doc.length;
-      setCommentHighlightRange({
-        start: Math.min(from, docLength),
-        end: Math.min(to, docLength),
-      });
-    },
-    [],
-  );
-
   const updateFloatingCommentButtonPosition = useCallback(() => {
     if (!hasSelection || pendingComment) {
       setFloatingCommentButtonPosition((current) =>
@@ -562,19 +554,26 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
     if (!view) {
       return;
     }
-    if (!commentHighlightRange) {
-      view.dispatch({
-        effects: setCommentHighlightsEffect.of([]),
-      });
-      return;
-    }
     const docLength = view.state.doc.length;
-    const from = Math.max(0, Math.min(commentHighlightRange.start, docLength));
-    const to = Math.max(from, Math.min(commentHighlightRange.end, docLength));
+    const ranges = comments
+      .map((comment) => {
+        const from = Math.max(0, Math.min(comment.anchorStart, docLength));
+        const to = Math.max(from, Math.min(comment.anchorEnd, docLength));
+        if (to <= from) {
+          return null;
+        }
+        return {
+          from,
+          to,
+          focused: hoveredCommentId === comment.id,
+        };
+      })
+      .filter((range): range is NonNullable<typeof range> => range !== null);
+
     view.dispatch({
-      effects: setCommentHighlightsEffect.of([{ from, to }]),
+      effects: setCommentHighlightsEffect.of(ranges),
     });
-  }, [commentHighlightRange, activeDocUrl]);
+  }, [activeDocUrl, comments, hoveredCommentId]);
 
   const openPendingComment = () => {
     if (!hasSelection || !selectedText.trim()) {
@@ -618,7 +617,6 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
 
     setPendingComment(null);
     setHoveredCommentId(commentId);
-    highlightRange(anchorStart, anchorEnd);
   };
 
   const submitReply = (commentId: string) => {
@@ -734,7 +732,6 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
 
     if (hoveredCommentId === commentId) {
       setHoveredCommentId(null);
-      setCommentHighlightRange(null);
     }
     if (replyingToCommentId === commentId) {
       setReplyingToCommentId(null);
@@ -942,12 +939,10 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
                       key={comment.id}
                       onMouseEnter={() => {
                         setHoveredCommentId(comment.id);
-                        highlightRange(comment.anchorStart, comment.anchorEnd);
                       }}
                       onMouseLeave={() => {
                         if (hoveredCommentId === comment.id) {
                           setHoveredCommentId(null);
-                          setCommentHighlightRange(null);
                         }
                       }}
                       className={`group absolute left-0 right-0 z-[5] rounded-2xl p-4 transition ${
