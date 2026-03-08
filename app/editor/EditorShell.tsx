@@ -6,7 +6,7 @@ import { useDocument, useRepo } from "@automerge/automerge-repo-react-hooks";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
 import { EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
-import { Decoration, EditorView } from "@codemirror/view";
+import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DocumentIndexDoc, MarkdownDoc } from "@/lib/types";
 import { EditorHeader } from "./EditorHeader";
@@ -35,6 +35,13 @@ interface FloatingCommentButtonPosition {
 
 interface AnchoredCommentPosition {
   top: number;
+}
+
+interface CollaboratorCursorPopover {
+  name: string;
+  color: string;
+  top: number;
+  left: number;
 }
 
 function areFloatingPositionsEqual(
@@ -70,6 +77,16 @@ function areAnchoredPositionsEqual(
 const setCommentHighlightsEffect = StateEffect.define<
   readonly { from: number; to: number; focused?: boolean }[]
 >();
+const setCollaboratorPresenceEffect = StateEffect.define<
+  readonly {
+    from: number;
+    to: number;
+    cursor: number;
+    color: string;
+    userId: string;
+    displayName: string;
+  }[]
+>();
 
 const commentHighlightsField = StateField.define({
   create() {
@@ -93,6 +110,82 @@ const commentHighlightsField = StateField.define({
             class: range.focused
               ? "cm-comment-highlight cm-comment-highlight-active"
               : "cm-comment-highlight",
+          }),
+        );
+      }
+      next = builder.finish();
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+class RemoteCursorWidget extends WidgetType {
+  constructor(
+    private readonly color: string,
+    private readonly userId: string,
+    private readonly displayName: string,
+  ) {
+    super();
+  }
+
+  toDOM(): HTMLElement {
+    const cursor = document.createElement("span");
+    cursor.style.display = "inline-block";
+    cursor.style.width = "2px";
+    cursor.style.height = "1.2em";
+    cursor.style.marginLeft = "-1px";
+    cursor.style.verticalAlign = "text-bottom";
+    cursor.style.backgroundColor = this.color;
+    cursor.style.pointerEvents = "auto";
+    cursor.style.cursor = "pointer";
+    cursor.className = "cm-remote-cursor";
+    cursor.dataset.userId = this.userId;
+    cursor.dataset.displayName = this.displayName;
+    cursor.dataset.color = this.color;
+    return cursor;
+  }
+}
+
+const collaboratorPresenceField = StateField.define({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, transaction) {
+    let next = decorations.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (!effect.is(setCollaboratorPresenceEffect)) {
+        continue;
+      }
+
+      const builder = new RangeSetBuilder<Decoration>();
+      for (const range of effect.value) {
+        if (range.to > range.from) {
+          builder.add(
+            range.from,
+            range.to,
+            Decoration.mark({
+              class: "cm-remote-selection",
+              attributes: {
+                "data-user-id": range.userId,
+                "data-display-name": range.displayName,
+                "data-color": range.color,
+                style: `background-color: ${range.color}33;`,
+              },
+            }),
+          );
+        }
+
+        builder.add(
+          range.cursor,
+          range.cursor,
+          Decoration.widget({
+            widget: new RemoteCursorWidget(
+              range.color,
+              range.userId,
+              range.displayName,
+            ),
+            side: 1,
           }),
         );
       }
@@ -144,6 +237,25 @@ function avatarFallback(name: string, email: string): string {
   return source.slice(0, 1).toUpperCase();
 }
 
+const USER_COLORS = [
+  "#d9480f",
+  "#1d4ed8",
+  "#047857",
+  "#7c3aed",
+  "#be123c",
+  "#0f766e",
+  "#b45309",
+  "#4338ca",
+];
+
+function getUserColor(userId: string): string {
+  let hash = 0;
+  for (let i = 0; i < userId.length; i += 1) {
+    hash = (hash * 31 + userId.charCodeAt(i)) >>> 0;
+  }
+  return USER_COLORS[hash % USER_COLORS.length];
+}
+
 function formatCommentDate(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
@@ -171,6 +283,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
     Record<string, AnchoredCommentPosition>
   >({});
   const [pendingCommentTop, setPendingCommentTop] = useState<number | null>(null);
+  const [cursorPopover, setCursorPopover] = useState<CollaboratorCursorPopover | null>(null);
 
   const activeDocUrl = docUrl;
   const indexStorageKey = `md-editor:index-url:${user.id}`;
@@ -194,7 +307,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
   });
 
   const [activeDoc, changeActiveDoc] = useDocument<MarkdownDoc>(activeDocUrl, {
-    suspense: false,
+    suspense: true,
   });
   const hasActiveDoc = Boolean(activeDoc);
   const activeDocContent = activeDoc?.content ?? "";
@@ -270,6 +383,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
         extensions: [
           markdown(),
           commentHighlightsField,
+          collaboratorPresenceField,
           editorTheme,
           EditorView.lineWrapping,
           EditorView.updateListener.of((update) => {
@@ -550,6 +664,63 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
   }, [activeDocUrl, updateFloatingCommentButtonPosition, updateAnchoredCommentPositions]);
 
   useEffect(() => {
+    const host = editorHostRef.current;
+    if (!host) {
+      return;
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const remoteCursor = target?.closest<HTMLElement>(".cm-remote-cursor");
+      const remoteSelection = target?.closest<HTMLElement>(".cm-remote-selection");
+      const sourceElement = remoteCursor ?? remoteSelection;
+      if (!sourceElement) {
+        setCursorPopover((current) => (current === null ? current : null));
+        return;
+      }
+
+      const name = sourceElement.dataset.displayName;
+      const color = sourceElement.dataset.color;
+      if (!name || !color) {
+        setCursorPopover((current) => (current === null ? current : null));
+        return;
+      }
+
+      const hostRect = host.getBoundingClientRect();
+      const sourceRect = sourceElement.getBoundingClientRect();
+      const nextPopover: CollaboratorCursorPopover = {
+        name,
+        color,
+        top: sourceRect.top - hostRect.top - 30,
+        left: sourceRect.left - hostRect.left + 6,
+      };
+      setCursorPopover((current) => {
+        if (
+          current &&
+          current.name === nextPopover.name &&
+          current.color === nextPopover.color &&
+          current.top === nextPopover.top &&
+          current.left === nextPopover.left
+        ) {
+          return current;
+        }
+        return nextPopover;
+      });
+    };
+
+    const handleMouseLeave = () => {
+      setCursorPopover((current) => (current === null ? current : null));
+    };
+
+    host.addEventListener("mousemove", handleMouseMove);
+    host.addEventListener("mouseleave", handleMouseLeave);
+    return () => {
+      host.removeEventListener("mousemove", handleMouseMove);
+      host.removeEventListener("mouseleave", handleMouseLeave);
+    };
+  }, [activeDocUrl]);
+
+  useEffect(() => {
     const view = editorViewRef.current;
     if (!view) {
       return;
@@ -789,21 +960,88 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
           ...entry,
           startIndex,
           endIndex,
+          color: getUserColor(entry.userId),
         };
       })
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }, [activeDoc, user.id]);
 
+  const headerCollaborators = useMemo(() => {
+    const collaboratorsById = new Map<
+      string,
+      {
+        userId: string;
+        displayName: string;
+        updatedAt: number;
+      }
+    >();
+
+    for (const entry of Object.values(activeDoc?.cursors ?? {})) {
+      collaboratorsById.set(entry.userId, {
+        userId: entry.userId,
+        displayName: entry.displayName,
+        updatedAt: entry.updatedAt,
+      });
+    }
+
+    if (!collaboratorsById.has(user.id)) {
+      collaboratorsById.set(user.id, {
+        userId: user.id,
+        displayName: user.name,
+        updatedAt: Date.now(),
+      });
+    }
+
+    return Array.from(collaboratorsById.values())
+      .sort((a, b) => {
+        if (a.userId === user.id) {
+          return -1;
+        }
+        if (b.userId === user.id) {
+          return 1;
+        }
+        return b.updatedAt - a.updatedAt;
+      })
+      .map((entry) => ({
+        userId: entry.userId,
+        displayName: entry.displayName,
+        color: getUserColor(entry.userId),
+        image: entry.userId === user.id ? user.image : null,
+      }));
+  }, [activeDoc?.cursors, user.id, user.image, user.name]);
+
+  useEffect(() => {
+    const view = editorViewRef.current;
+    if (!view) {
+      return;
+    }
+    const docLength = view.state.doc.length;
+    const ranges = collaboratorCursors.map((entry) => {
+      const from = Math.max(0, Math.min(Math.min(entry.startIndex, entry.endIndex), docLength));
+      const to = Math.max(0, Math.min(Math.max(entry.startIndex, entry.endIndex), docLength));
+      const cursor = Math.max(0, Math.min(entry.endIndex, docLength));
+      return {
+        from,
+        to,
+        cursor,
+        color: entry.color,
+        userId: entry.userId,
+        displayName: entry.displayName,
+      };
+    });
+
+    view.dispatch({
+      effects: setCollaboratorPresenceEffect.of(ranges),
+    });
+  }, [activeDocUrl, collaboratorCursors]);
+
+  if (!activeDoc) {
+    return null;
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {!activeDoc ? (
-        <div className="p-8">
-          <div className="rounded-lg border border-dashed border-black/20 p-8 text-sm text-black/70">
-            Loading document...
-          </div>
-        </div>
-      ) : (
-        <>
+      <>
           <div className="w-full border-b border-black/10 bg-background px-6 py-4">
             <EditorHeader
               title={activeDoc.title}
@@ -813,27 +1051,11 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
                 })
               }
               user={user}
+              collaborators={headerCollaborators}
             />
           </div>
 
-          <div className="mx-auto w-full max-w-[1320px] space-y-4 px-6 pt-4">
-            {collaboratorCursors.length > 0 ? (
-              <div className="rounded-lg border border-black/10 bg-white p-3 text-xs">
-              <p className="mb-2 font-semibold text-black/70">Collaborators</p>
-              <div className="space-y-1">
-                {collaboratorCursors.map((entry) => (
-                  <p key={entry.userId} className="truncate text-black/70">
-                    {entry.displayName} at{" "}
-                    {toLineAndColumn(activeDoc.content ?? "", entry.startIndex)}
-                    {entry.startIndex !== entry.endIndex
-                      ? ` - ${toLineAndColumn(activeDoc.content ?? "", entry.endIndex)}`
-                      : ""}
-                  </p>
-                ))}
-              </div>
-              </div>
-            ) : null}
-
+          <div className="mx-auto w-full max-w-[1320px] px-6 pt-4">
             <div className="flex items-start gap-3 pb-12">
               <div className="relative w-full min-w-0 flex-[3]">
               {hasSelection && !pendingComment && floatingCommentButtonPosition ? (
@@ -859,8 +1081,21 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
 
               <div
                 ref={editorHostRef}
-                className="w-full rounded-lg border border-black/15 bg-white"
-              />
+                className="relative w-full rounded-lg border border-black/15 bg-white"
+              >
+                {cursorPopover ? (
+                  <div
+                    className="pointer-events-none absolute z-30 rounded-md border border-black/10 bg-white px-2 py-1 text-xs font-semibold shadow-[0_4px_10px_rgba(0,0,0,0.15)]"
+                    style={{
+                      top: Math.max(cursorPopover.top, 6),
+                      left: Math.max(cursorPopover.left, 6),
+                      color: cursorPopover.color,
+                    }}
+                  >
+                    {cursorPopover.name}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
               <aside className="relative min-h-[70vh] min-w-[240px] max-w-[320px] flex-[1]">
@@ -1146,8 +1381,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
               </aside>
             </div>
           </div>
-        </>
-      )}
+      </>
     </div>
   );
 }
