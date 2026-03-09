@@ -1,10 +1,10 @@
 "use client";
 
-import { getCursor, getCursorPosition } from "@automerge/automerge";
-import type { Cursor } from "@automerge/automerge";
 import { useDocument, useRepo } from "@automerge/automerge-repo-react-hooks";
+import { useDocHandle } from "@automerge/automerge-repo-react-hooks";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
-import { EditorState, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+import { automergeSyncPlugin } from "@automerge/automerge-codemirror";
+import { EditorState, StateEffect, StateField } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -98,22 +98,17 @@ const commentHighlightsField = StateField.define({
       if (!effect.is(setCommentHighlightsEffect)) {
         continue;
       }
-      const builder = new RangeSetBuilder<Decoration>();
-      for (const range of effect.value) {
-        if (range.to <= range.from) {
-          continue;
-        }
-        builder.add(
-          range.from,
-          range.to,
-          Decoration.mark({
-            class: range.focused
-              ? "cm-comment-highlight cm-comment-highlight-active"
-              : "cm-comment-highlight",
-          }),
-        );
-      }
-      next = builder.finish();
+      const sortedRanges = [...effect.value]
+        .filter((range) => range.to > range.from)
+        .sort((a, b) => a.from - b.from || a.to - b.to);
+      const decorationsSet = sortedRanges.map((range) =>
+        Decoration.mark({
+          class: range.focused
+            ? "cm-comment-highlight cm-comment-highlight-active"
+            : "cm-comment-highlight",
+        }).range(range.from, range.to),
+      );
+      next = Decoration.set(decorationsSet, true);
     }
     return next;
   },
@@ -158,12 +153,10 @@ const collaboratorPresenceField = StateField.define({
         continue;
       }
 
-      const builder = new RangeSetBuilder<Decoration>();
+      const ranges: ReturnType<Decoration["range"]>[] = [];
       for (const range of effect.value) {
         if (range.to > range.from) {
-          builder.add(
-            range.from,
-            range.to,
+          ranges.push(
             Decoration.mark({
               class: "cm-remote-selection",
               attributes: {
@@ -172,13 +165,11 @@ const collaboratorPresenceField = StateField.define({
                 "data-color": range.color,
                 style: `background-color: ${range.color}33;`,
               },
-            }),
+            }).range(range.from, range.to),
           );
         }
 
-        builder.add(
-          range.cursor,
-          range.cursor,
+        ranges.push(
           Decoration.widget({
             widget: new RemoteCursorWidget(
               range.color,
@@ -186,10 +177,10 @@ const collaboratorPresenceField = StateField.define({
               range.displayName,
             ),
             side: 1,
-          }),
+          }).range(range.cursor),
         );
       }
-      next = builder.finish();
+      next = Decoration.set(ranges, true);
     }
     return next;
   },
@@ -309,6 +300,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
   const [activeDoc, changeActiveDoc] = useDocument<MarkdownDoc>(activeDocUrl, {
     suspense: true,
   });
+  const activeDocHandle = useDocHandle<MarkdownDoc>(activeDocUrl, { suspense: true });
   const hasActiveDoc = Boolean(activeDoc);
   const activeDocContent = activeDoc?.content ?? "";
   const activeDocContentRef = useRef(activeDocContent);
@@ -348,12 +340,12 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
           doc.cursors = {};
         }
 
-        const startCursor = getCursor(doc, ["content"], start, "after");
-        const endCursor = getCursor(doc, ["content"], end, "after");
+        const safeStart = Math.max(0, Math.min(start, doc.content.length));
+        const safeEnd = Math.max(0, Math.min(end, doc.content.length));
         const existing = doc.cursors[user.id];
         if (
-          existing?.cursor === startCursor &&
-          existing.selectionCursor === endCursor &&
+          existing?.startIndex === safeStart &&
+          existing.endIndex === safeEnd &&
           existing.displayName === user.name
         ) {
           return;
@@ -362,8 +354,8 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
         doc.cursors[user.id] = {
           userId: user.id,
           displayName: user.name,
-          cursor: startCursor,
-          selectionCursor: endCursor,
+          startIndex: safeStart,
+          endIndex: safeEnd,
           updatedAt: Date.now(),
         };
       });
@@ -372,7 +364,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
   );
 
   useEffect(() => {
-    if (!hasActiveDoc || !activeDocUrl || !editorHostRef.current) {
+    if (!hasActiveDoc || !activeDocUrl || !editorHostRef.current || !activeDocHandle) {
       return;
     }
 
@@ -386,24 +378,47 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
           collaboratorPresenceField,
           editorTheme,
           EditorView.lineWrapping,
+          automergeSyncPlugin({
+            handle: activeDocHandle,
+            path: ["content"],
+          }),
           EditorView.updateListener.of((update) => {
             const { from, to } = update.state.selection.main;
 
             if (update.docChanged) {
-              const content = update.state.doc.toString();
               setSelectionRange({ start: from, end: to });
+              const mappedDocLength = update.state.doc.length;
+              const mapIndex = (index: number) => {
+                const mapped = update.changes.mapPos(index, 1);
+                return Math.max(0, Math.min(mapped, mappedDocLength));
+              };
               changeActiveDoc((doc) => {
-                doc.content = content;
+                if (typeof doc.content !== "string") {
+                  doc.content = "";
+                }
                 if (!doc.cursors) {
                   doc.cursors = {};
                 }
-                const startCursor = getCursor(doc, ["content"], from, "after");
-                const endCursor = getCursor(doc, ["content"], to, "after");
+
+                for (const cursor of Object.values(doc.cursors)) {
+                  if (!cursor) {
+                    continue;
+                  }
+                  const currentStart =
+                    typeof cursor.startIndex === "number" ? cursor.startIndex : 0;
+                  const currentEnd =
+                    typeof cursor.endIndex === "number" ? cursor.endIndex : currentStart;
+                  cursor.startIndex = mapIndex(currentStart);
+                  cursor.endIndex = mapIndex(currentEnd);
+                }
+
+                const safeStart = Math.max(0, Math.min(from, mappedDocLength));
+                const safeEnd = Math.max(0, Math.min(to, mappedDocLength));
                 doc.cursors[user.id] = {
                   userId: user.id,
                   displayName: user.name,
-                  cursor: startCursor,
-                  selectionCursor: endCursor,
+                  startIndex: safeStart,
+                  endIndex: safeEnd,
                   updatedAt: Date.now(),
                 };
               });
@@ -434,32 +449,12 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
   }, [
     activeDocUrl,
     hasActiveDoc,
+    activeDocHandle,
     changeActiveDoc,
     updateLocalSelection,
     user.id,
     user.name,
   ]);
-
-  useEffect(() => {
-    const view = editorViewRef.current;
-    if (!view || !hasActiveDoc) {
-      return;
-    }
-    const current = view.state.doc.toString();
-    const next = activeDocContent;
-    if (current === next) {
-      return;
-    }
-
-    const selection = view.state.selection.main;
-    view.dispatch({
-      changes: { from: 0, to: current.length, insert: next },
-      selection: {
-        anchor: Math.min(selection.anchor, next.length),
-        head: Math.min(selection.head, next.length),
-      },
-    });
-  }, [activeDocContent, activeDocUrl, hasActiveDoc]);
 
   const orderedSelection = useMemo(() => {
     const start = Math.min(selectionRange.start, selectionRange.end);
@@ -942,19 +937,8 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
     return Object.values(activeDoc.cursors)
       .filter((entry) => entry.userId !== user.id)
       .map((entry) => {
-        let startIndex = 0;
-        let endIndex = 0;
-        try {
-          startIndex = getCursorPosition(activeDoc, ["content"], entry.cursor as Cursor);
-          endIndex = getCursorPosition(
-            activeDoc,
-            ["content"],
-            (entry.selectionCursor ?? entry.cursor) as Cursor,
-          );
-        } catch {
-          startIndex = 0;
-          endIndex = 0;
-        }
+        const startIndex = typeof entry.startIndex === "number" ? entry.startIndex : 0;
+        const endIndex = typeof entry.endIndex === "number" ? entry.endIndex : startIndex;
 
         return {
           ...entry,

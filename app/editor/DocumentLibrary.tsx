@@ -89,10 +89,17 @@ function avatarFallback(name: string, email: string): string {
   return source.slice(0, 1).toUpperCase();
 }
 
+function isValidAutomergeUrl(value: string): value is AutomergeUrl {
+  return /^automerge:[A-Za-z0-9_-]+$/.test(value.trim());
+}
+
 export function DocumentLibrary({ user }: DocumentLibraryProps) {
   const repo = useRepo();
   const router = useRouter();
   const [indexUrl, setIndexUrl] = useState<AutomergeUrl | undefined>(undefined);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [newDocumentInput, setNewDocumentInput] = useState(generateDicewareTitle());
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   const indexStorageKey = `md-editor:index-url:${user.id}`;
 
   useEffect(() => {
@@ -118,12 +125,12 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
   );
   const [documents] = useDocuments<MarkdownDoc>(documentUrls, { suspense: false });
 
-  const createDocument = () => {
+  const createDocument = (title: string) => {
     if (!indexDoc) {
       return;
     }
     const handle = repo.create<MarkdownDoc>({
-      title: generateDicewareTitle(),
+      title: title.trim() || generateDicewareTitle(),
       content: "",
       comments: [],
       cursors: {},
@@ -137,6 +144,59 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
     });
     router.push(`/editor/${encodeURIComponent(handle.url)}`);
   };
+
+  const handleOpenCreateModal = async () => {
+    if (!indexDoc) {
+      return;
+    }
+    const fallbackTitle = generateDicewareTitle();
+    setNewDocumentInput(fallbackTitle);
+    setIsCreateModalOpen(true);
+
+    if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
+      return;
+    }
+
+    try {
+      const clipboardText = (await navigator.clipboard.readText()).trim();
+      if (isValidAutomergeUrl(clipboardText)) {
+        setNewDocumentInput(clipboardText);
+      }
+    } catch {
+      // Ignore clipboard permission errors and keep fallback title.
+    }
+  };
+
+  const handleCreateModalSubmit = () => {
+    const input = newDocumentInput.trim();
+    if (isValidAutomergeUrl(input)) {
+      setIsCreateModalOpen(false);
+      router.push(`/editor/${encodeURIComponent(input)}`);
+      return;
+    }
+
+    createDocument(input);
+    setIsCreateModalOpen(false);
+  };
+
+  const handleCopyUrl = async (url: string) => {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedUrl(url);
+      window.setTimeout(() => {
+        setCopiedUrl((current) => (current === url ? null : current));
+      }, 1500);
+    } catch {
+      // Ignore clipboard permission errors.
+    }
+  };
+
+  const submitLabel = isValidAutomergeUrl(newDocumentInput)
+    ? "Go to document"
+    : "Create document";
 
   return (
     <main className="min-h-screen bg-background p-8 text-foreground">
@@ -168,7 +228,7 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
             </div>
             <button
               type="button"
-              onClick={createDocument}
+              onClick={handleOpenCreateModal}
               disabled={!indexDoc}
               className="rounded-md bg-black px-3 py-2 text-sm font-medium text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -187,18 +247,75 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
           {(indexDoc?.documents ?? []).map((entry) => {
             const doc = documents.get(entry.url as AutomergeUrl);
             return (
-              <Link
+              <div
                 key={entry.url}
-                href={`/editor/${encodeURIComponent(entry.url)}`}
-                className="block rounded-lg border border-black/10 bg-white px-4 py-3 transition hover:border-black/25 hover:bg-black/[0.02]"
+                className="rounded-lg border border-black/10 bg-white px-4 py-3 transition hover:border-black/25 hover:bg-black/[0.02]"
               >
-                <p className="truncate text-base font-medium">{doc?.title ?? "Untitled"}</p>
-                <p className="truncate text-xs text-black/60">{entry.url}</p>
-              </Link>
+                <Link
+                  href={`/editor/${encodeURIComponent(entry.url)}`}
+                  className="block truncate text-base font-medium"
+                >
+                  {doc?.title ?? "Untitled"}
+                </Link>
+                <div className="mt-1 flex items-center gap-2">
+                  <Link
+                    href={`/editor/${encodeURIComponent(entry.url)}`}
+                    className="truncate text-xs text-black/60"
+                  >
+                    {entry.url}
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyUrl(entry.url)}
+                    className="rounded border border-black/15 px-2 py-0.5 text-[11px] font-medium text-black/70 transition hover:bg-black/5"
+                    aria-label={`Copy ${doc?.title ?? "document"} URL`}
+                  >
+                    {copiedUrl === entry.url ? "Copied" : "Copy"}
+                  </button>
+                </div>
+              </div>
             );
           })}
         </div>
       </div>
+
+      {isCreateModalOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-lg rounded-lg border border-black/10 bg-white p-5 shadow-[0_12px_28px_rgba(0,0,0,0.18)]">
+            <h2 className="text-lg font-semibold">Open or create a document</h2>
+            <p className="mt-1 text-sm text-black/60">
+              Paste an Automerge URL to join a doc, or enter a title to create one.
+            </p>
+            <label htmlFor="new-document-input" className="mt-4 block text-sm font-medium">
+              Document URL or title
+            </label>
+            <input
+              id="new-document-input"
+              type="text"
+              value={newDocumentInput}
+              onChange={(event) => setNewDocumentInput(event.target.value)}
+              className="mt-1 w-full rounded-md border border-black/15 px-3 py-2 text-sm outline-none focus:border-black/40"
+              autoFocus
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsCreateModalOpen(false)}
+                className="rounded-md border border-black/15 px-3 py-2 text-sm font-medium transition hover:bg-black/5"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateModalSubmit}
+                className="rounded-md bg-black px-3 py-2 text-sm font-medium text-white transition hover:bg-black/85"
+              >
+                {submitLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
