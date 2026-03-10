@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { avatarFallback, type ViewMode } from "./utils";
 
 interface HeaderCollaborator {
   userId: string;
@@ -19,11 +20,8 @@ interface EditorHeaderProps {
     image: string | null;
   };
   collaborators: HeaderCollaborator[];
-}
-
-function avatarFallback(name: string, email: string): string {
-  const source = name.trim() || email.trim() || "U";
-  return source.slice(0, 1).toUpperCase();
+  viewMode: ViewMode;
+  onViewModeChange: (mode: ViewMode) => void;
 }
 
 function CollaboratorAvatar({ collaborator }: { collaborator: HeaderCollaborator }) {
@@ -46,7 +44,39 @@ function CollaboratorAvatar({ collaborator }: { collaborator: HeaderCollaborator
   );
 }
 
-export function EditorHeader({ title, onTitleChange, user, collaborators }: EditorHeaderProps) {
+const viewModeButtons: { mode: ViewMode; label: string; icon: React.ReactNode }[] = [
+  {
+    mode: "edit",
+    label: "Edit",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" />
+      </svg>
+    ),
+  },
+  {
+    mode: "split",
+    label: "Split",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="1" y="2" width="14" height="12" rx="1.5" />
+        <line x1="8" y1="2" x2="8" y2="14" />
+      </svg>
+    ),
+  },
+  {
+    mode: "preview",
+    label: "Preview",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M1 8s3-5.5 7-5.5S15 8 15 8s-3 5.5-7 5.5S1 8 1 8z" />
+        <circle cx="8" cy="8" r="2" />
+      </svg>
+    ),
+  },
+];
+
+export function EditorHeader({ title, onTitleChange, user, collaborators, viewMode, onViewModeChange }: EditorHeaderProps) {
   const [isCollaboratorPopoverOpen, setIsCollaboratorPopoverOpen] = useState(false);
   const visibleAvatars = collaborators.slice(0, 3);
   const extraCount = Math.max(0, collaborators.length - visibleAvatars.length);
@@ -69,6 +99,26 @@ export function EditorHeader({ title, onTitleChange, user, collaborators }: Edit
         />
       </div>
       <div className="flex min-w-0 items-center gap-3">
+        <div className="flex overflow-hidden rounded-lg border border-black/15">
+          {viewModeButtons.map(({ mode, label, icon }) => (
+            <button
+              key={mode}
+              type="button"
+              aria-label={label}
+              title={label}
+              onClick={() => onViewModeChange(mode)}
+              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition ${
+                viewMode === mode
+                  ? "bg-black/10 text-black"
+                  : "bg-white text-black/50 hover:bg-black/5 hover:text-black/80"
+              }`}
+            >
+              {icon}
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div
           className="relative"
           onMouseEnter={() => setIsCollaboratorPopoverOpen(true)}

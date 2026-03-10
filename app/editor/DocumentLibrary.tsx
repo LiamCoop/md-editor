@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { DocumentIndexDoc, MarkdownDoc } from "@/lib/types";
+import { avatarFallback } from "./utils";
 
 const DICEWARE_WORDS = [
   "amber",
@@ -82,11 +83,6 @@ function randomInt(max: number): number {
 
 function generateDicewareTitle(): string {
   return `${DICEWARE_WORDS[randomInt(DICEWARE_WORDS.length)]} ${DICEWARE_WORDS[randomInt(DICEWARE_WORDS.length)]} ${DICEWARE_WORDS[randomInt(DICEWARE_WORDS.length)]}`;
-}
-
-function avatarFallback(name: string, email: string): string {
-  const source = name.trim() || email.trim() || "U";
-  return source.slice(0, 1).toUpperCase();
 }
 
 function isValidAutomergeUrl(value: string): value is AutomergeUrl {
@@ -232,7 +228,7 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
               disabled={!indexDoc}
               className="rounded-md bg-black px-3 py-2 text-sm font-medium text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              New document
+              Add Document
             </button>
           </div>
         </header>
