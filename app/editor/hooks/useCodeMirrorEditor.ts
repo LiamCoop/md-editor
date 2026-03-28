@@ -6,8 +6,12 @@ import { EditorState } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import { useEffect, useRef } from "react";
-import type { MarkdownDoc } from "@/lib/types";
-import { editorTheme } from "../codemirror/extensions";
+import type { Comment, MarkdownDoc } from "@/lib/types";
+import {
+    editorTheme,
+    commentHighlightsField,
+    setCommentHighlightsEffect,
+} from "../codemirror/extensions";
 import {
     remoteCursorsExtension,
     setRemoteCursors,
@@ -19,10 +23,16 @@ export function useCodeMirrorEditor({
     docUrl,
     user,
     activeDoc,
+    comments,
+    hoveredCommentId,
+    onSelectionChange,
 }: {
     docUrl: AutomergeUrl;
     user: { id: string; name: string; email: string; image: string | null };
     activeDoc: MarkdownDoc | undefined;
+    comments: Comment[];
+    hoveredCommentId: string | null;
+    onSelectionChange: (range: { start: number; end: number }) => void;
 }) {
     const activeDocHandle = useDocHandle<MarkdownDoc>(docUrl, { suspense: true });
     const hasActiveDoc = Boolean(activeDoc);
@@ -37,6 +47,9 @@ export function useCodeMirrorEditor({
     // Keep a ref to broadcastCursor so the CM update listener always has the latest
     const broadcastCursorRef = useRef(broadcastCursor);
     broadcastCursorRef.current = broadcastCursor;
+
+    const onSelectionChangeRef = useRef(onSelectionChange);
+    onSelectionChangeRef.current = onSelectionChange;
 
     // Keep a ref to the doc handle for use inside CM extensions
     const activeDocHandleRef = useRef(activeDocHandle);
@@ -63,9 +76,11 @@ export function useCodeMirrorEditor({
                         path: ["content"],
                     }),
                     remoteCursorsExtension(),
+                    commentHighlightsField,
                     EditorView.updateListener.of((update) => {
                         if (!update.selectionSet) return;
                         const { head, anchor } = update.state.selection.main;
+                        onSelectionChangeRef.current({ start: head, end: anchor });
                         const doc = activeDocHandleRef.current?.docSync();
                         if (!doc) return;
                         try {
@@ -122,6 +137,39 @@ export function useCodeMirrorEditor({
             effects: setRemoteCursors.of(resolved),
         });
     }, [peerCursorData, activeDoc]);
+
+    // Sync comment highlights into CodeMirror decorations
+    useEffect(() => {
+        const view = editorViewRef.current;
+        const handle = activeDocHandleRef.current;
+        if (!view || !handle) return;
+        const doc = handle.docSync();
+        if (!doc) return;
+
+        const docLength = view.state.doc.length;
+        const highlights = comments
+            .map((comment) => {
+                try {
+                    const from = getCursorPosition(doc, ["content"], comment.anchorStartCursor);
+                    const to = getCursorPosition(doc, ["content"], comment.anchorEndCursor);
+                    const clampedFrom = Math.max(0, Math.min(from, docLength));
+                    const clampedTo = Math.max(clampedFrom, Math.min(to, docLength));
+                    if (clampedTo <= clampedFrom) return null;
+                    return {
+                        from: clampedFrom,
+                        to: clampedTo,
+                        focused: hoveredCommentId === comment.id,
+                    };
+                } catch {
+                    return null;
+                }
+            })
+            .filter((h): h is NonNullable<typeof h> => h !== null);
+
+        view.dispatch({
+            effects: setCommentHighlightsEffect.of(highlights),
+        });
+    }, [comments, hoveredCommentId, activeDoc]);
 
     return {
         editorHostRef,

@@ -128,6 +128,7 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
     const handle = repo.create<MarkdownDoc>({
       title: title.trim() || generateDicewareTitle(),
       content: "",
+      comments: [],
     });
     changeIndexDoc((doc) => {
       doc.documents.push({
