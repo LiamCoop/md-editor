@@ -175,6 +175,74 @@ export function useComments({
         setEditingCommentDraft("");
     };
 
+    const startEditingReply = (replyId: string, currentBody: string, authorId: string) => {
+        if (authorId !== user.id) {
+            return;
+        }
+        setOpenCommentMenuId(null);
+        setEditingCommentId(replyId);
+        setEditingCommentDraft(currentBody);
+    };
+
+    const saveEditedReply = (commentId: string, replyId: string) => {
+        const body = editingCommentDraft.trim();
+        if (!activeDoc || !body) {
+            return;
+        }
+
+        changeActiveDoc((doc) => {
+            if (!doc.comments) {
+                return;
+            }
+            const parent = doc.comments.find((entry) => entry.id === commentId);
+            if (!parent?.replies) {
+                return;
+            }
+            const reply = parent.replies.find((r) => r.id === replyId);
+            if (!reply || reply.authorId !== user.id) {
+                return;
+            }
+            reply.body = body;
+        });
+
+        setEditingCommentId(null);
+        setEditingCommentDraft("");
+    };
+
+    const deleteReply = (commentId: string, replyId: string, authorId: string) => {
+        if (authorId !== user.id) {
+            return;
+        }
+
+        const shouldDelete = window.confirm("Delete this reply?");
+        if (!shouldDelete) {
+            return;
+        }
+
+        changeActiveDoc((doc) => {
+            if (!doc.comments) {
+                return;
+            }
+            const parent = doc.comments.find((entry) => entry.id === commentId);
+            if (!parent?.replies) {
+                return;
+            }
+            const index = parent.replies.findIndex((r) => r.id === replyId);
+            if (index < 0 || parent.replies[index].authorId !== user.id) {
+                return;
+            }
+            parent.replies.splice(index, 1);
+        });
+
+        if (editingCommentId === replyId) {
+            setEditingCommentId(null);
+            setEditingCommentDraft("");
+        }
+        if (openCommentMenuId === replyId) {
+            setOpenCommentMenuId(null);
+        }
+    };
+
     const deleteComment = (commentId: string, authorId: string) => {
         if (authorId !== user.id) {
             return;
@@ -258,5 +326,8 @@ export function useComments({
         cancelEditingComment,
         saveEditedComment,
         deleteComment,
+        startEditingReply,
+        saveEditedReply,
+        deleteReply,
     };
 }

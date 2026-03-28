@@ -97,7 +97,7 @@ export function useCursorPresence({
         });
 
         const peers = Object.values(peerEntries).filter(
-            (p) => p.userId !== user.id,
+            (p) => p.userId && p.userId !== user.id,
         );
 
         const self: Collaborator = {

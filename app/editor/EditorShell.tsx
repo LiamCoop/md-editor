@@ -117,6 +117,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
                     collaborators={headerCollaborators}
                     viewMode={viewMode}
                     onViewModeChange={setViewMode}
+                    showUserMenu={false}
                 />
             </div>
 
@@ -183,6 +184,9 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
                             cancelEditingComment={commentState.cancelEditingComment}
                             saveEditedComment={commentState.saveEditedComment}
                             deleteComment={commentState.deleteComment}
+                            startEditingReply={commentState.startEditingReply}
+                            saveEditedReply={commentState.saveEditedReply}
+                            deleteReply={commentState.deleteReply}
                         />
                     ) : null}
                 </div>

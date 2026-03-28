@@ -30,6 +30,9 @@ interface CommentSidebarProps {
     cancelEditingComment: () => void;
     saveEditedComment: (commentId: string) => void;
     deleteComment: (commentId: string, authorId: string) => void;
+    startEditingReply: (replyId: string, currentBody: string, authorId: string) => void;
+    saveEditedReply: (commentId: string, replyId: string) => void;
+    deleteReply: (commentId: string, replyId: string, authorId: string) => void;
 }
 
 export function CommentSidebar({
@@ -60,6 +63,9 @@ export function CommentSidebar({
     cancelEditingComment,
     saveEditedComment,
     deleteComment,
+    startEditingReply,
+    saveEditedReply,
+    deleteReply,
 }: CommentSidebarProps) {
     return (
         <aside className="relative min-h-[70vh] min-w-60 max-w-[320px] flex-1">
@@ -126,7 +132,7 @@ export function CommentSidebar({
                         isHovered={hoveredCommentId === comment.id}
                         setHoveredCommentId={setHoveredCommentId}
                         hoveredCommentId={hoveredCommentId}
-                        isEditing={editingCommentId === comment.id}
+                        editingCommentId={editingCommentId}
                         editingCommentDraft={editingCommentDraft}
                         setEditingCommentDraft={setEditingCommentDraft}
                         openCommentMenuId={openCommentMenuId}
@@ -141,6 +147,9 @@ export function CommentSidebar({
                         cancelEditingComment={cancelEditingComment}
                         saveEditedComment={saveEditedComment}
                         deleteComment={deleteComment}
+                        startEditingReply={startEditingReply}
+                        saveEditedReply={saveEditedReply}
+                        deleteReply={deleteReply}
                     />
                 ))
                 : null}
@@ -156,7 +165,7 @@ function CommentCard({
     isHovered,
     setHoveredCommentId,
     hoveredCommentId,
-    isEditing,
+    editingCommentId,
     editingCommentDraft,
     setEditingCommentDraft,
     openCommentMenuId,
@@ -171,6 +180,9 @@ function CommentCard({
     cancelEditingComment,
     saveEditedComment,
     deleteComment,
+    startEditingReply,
+    saveEditedReply,
+    deleteReply,
 }: {
     comment: Comment;
     user: { id: string; name: string; email: string; image: string | null };
@@ -179,7 +191,7 @@ function CommentCard({
     isHovered: boolean;
     setHoveredCommentId: (id: string | null) => void;
     hoveredCommentId: string | null;
-    isEditing: boolean;
+    editingCommentId: string | null;
     editingCommentDraft: string;
     setEditingCommentDraft: (draft: string) => void;
     openCommentMenuId: string | null;
@@ -194,9 +206,13 @@ function CommentCard({
     cancelEditingComment: () => void;
     saveEditedComment: (commentId: string) => void;
     deleteComment: (commentId: string, authorId: string) => void;
+    startEditingReply: (replyId: string, currentBody: string, authorId: string) => void;
+    saveEditedReply: (commentId: string, replyId: string) => void;
+    deleteReply: (commentId: string, replyId: string, authorId: string) => void;
 }) {
     const isResolved = Boolean(comment.resolved);
     const isOwner = comment.authorId === user.id;
+    const isEditing = editingCommentId === comment.id;
 
     if (!anchoredPosition) {
         return null;
@@ -337,24 +353,104 @@ function CommentCard({
                     {comment.replies
                         .slice()
                         .sort((a, b) => a.createdAt - b.createdAt)
-                        .map((reply) => (
-                            <div
-                                key={reply.id}
-                                className="rounded-lg bg-white/70 px-3 py-2"
-                            >
-                                <div className="flex items-center justify-between gap-2">
-                                    <p className="truncate text-sm font-semibold text-black/75">
-                                        {reply.authorName}
-                                    </p>
-                                    <p className="text-[11px] text-black/50">
-                                        {formatCommentDate(reply.createdAt)}
-                                    </p>
+                        .map((reply) => {
+                            const isReplyOwner = reply.authorId === user.id;
+                            const isEditingReply = editingCommentId === reply.id;
+
+                            return (
+                                <div
+                                    key={reply.id}
+                                    className="group/reply rounded-lg bg-white/70 px-3 py-2"
+                                >
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="flex min-w-0 items-center gap-2">
+                                            <p className="truncate text-sm font-semibold text-black/75">
+                                                {reply.authorName}
+                                            </p>
+                                            <p className="text-[11px] text-black/50">
+                                                {formatCommentDate(reply.createdAt)}
+                                            </p>
+                                        </div>
+                                        {isReplyOwner ? (
+                                            <div
+                                                data-comment-menu-root="true"
+                                                className={`relative ${openCommentMenuId === reply.id ? "opacity-100" : "opacity-0 group-hover/reply:opacity-100"} transition`}
+                                            >
+                                                <button
+                                                    type="button"
+                                                    aria-label="Reply options"
+                                                    onClick={() =>
+                                                        setOpenCommentMenuId(
+                                                            openCommentMenuId === reply.id ? null : reply.id,
+                                                        )
+                                                    }
+                                                    className="rounded-md px-1.5 py-0.5 text-sm leading-none text-black/50 transition hover:bg-black/10"
+                                                >
+                                                    &#x22EE;
+                                                </button>
+                                                {openCommentMenuId === reply.id ? (
+                                                    <div className="absolute right-0 top-6 z-20 w-28 rounded-lg border border-black/10 bg-white p-1 shadow-[0_8px_20px_rgba(0,0,0,0.14)]">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() =>
+                                                                startEditingReply(
+                                                                    reply.id,
+                                                                    reply.body,
+                                                                    reply.authorId,
+                                                                )
+                                                            }
+                                                            className="block w-full rounded-md px-3 py-2 text-left text-sm text-black/80 transition hover:bg-black/5"
+                                                        >
+                                                            Edit
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => deleteReply(comment.id, reply.id, reply.authorId)}
+                                                            className="block w-full rounded-md px-3 py-2 text-left text-sm text-red-600 transition hover:bg-red-50"
+                                                        >
+                                                            Delete
+                                                        </button>
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                    {isEditingReply ? (
+                                        <div className="mt-1">
+                                            <textarea
+                                                value={editingCommentDraft}
+                                                onChange={(event) =>
+                                                    setEditingCommentDraft(event.target.value)
+                                                }
+                                                className="h-12 w-full resize-y rounded-lg border border-[#1a73e8] bg-white px-3 py-2 text-sm outline-none focus:border-[#1a73e8]"
+                                                placeholder="Edit your reply..."
+                                            />
+                                            <div className="mt-1.5 flex items-center justify-end gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={cancelEditingComment}
+                                                    className="rounded-full px-3 py-1 text-xs font-medium text-[#0b57d0] transition hover:bg-[#e8f0fe]"
+                                                >
+                                                    Cancel
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => saveEditedReply(comment.id, reply.id)}
+                                                    disabled={!editingCommentDraft.trim()}
+                                                    className="rounded-full bg-[#1a73e8] px-3 py-1 text-xs font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                                                >
+                                                    Save
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <p className="mt-1 whitespace-pre-wrap text-sm text-black/70">
+                                            {reply.body}
+                                        </p>
+                                    )}
                                 </div>
-                                <p className="mt-1 whitespace-pre-wrap text-sm text-black/70">
-                                    {reply.body}
-                                </p>
-                            </div>
-                        ))}
+                            );
+                        })}
                 </div>
             ) : null}
             {!isResolved && !isEditing && replyingToCommentId === comment.id ? (

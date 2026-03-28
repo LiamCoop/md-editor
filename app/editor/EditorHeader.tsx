@@ -23,6 +23,7 @@ interface EditorHeaderProps {
   collaborators: HeaderCollaborator[];
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
+  showUserMenu?: boolean;
 }
 
 function CollaboratorAvatar({ collaborator }: { collaborator: HeaderCollaborator }) {
@@ -77,7 +78,7 @@ const viewModeButtons: { mode: ViewMode; label: string; icon: React.ReactNode }[
   },
 ];
 
-export function EditorHeader({ title, onTitleChange, user, collaborators: rawCollaborators, viewMode, onViewModeChange }: EditorHeaderProps) {
+export function EditorHeader({ title, onTitleChange, user, collaborators: rawCollaborators, viewMode, onViewModeChange, showUserMenu = true }: EditorHeaderProps) {
   const [isCollaboratorPopoverOpen, setIsCollaboratorPopoverOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const collaborators = Array.from(
@@ -170,41 +171,43 @@ export function EditorHeader({ title, onTitleChange, user, collaborators: rawCol
           ) : null}
         </div>
 
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setIsUserMenuOpen((prev) => !prev)}
-            className="flex min-w-0 items-center gap-3 rounded-lg border border-black/10 bg-white px-3 py-2 transition hover:bg-black/5"
-          >
-            {user.image ? (
-              <img
-                src={user.image}
-                alt={user.name}
-                className="h-8 w-8 rounded-full object-cover"
-              />
-            ) : (
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold">
-                {avatarFallback(user.name, user.email)}
+        {showUserMenu ? (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setIsUserMenuOpen((prev) => !prev)}
+              className="flex min-w-0 items-center gap-3 rounded-lg border border-black/10 bg-white px-3 py-2 transition hover:bg-black/5"
+            >
+              {user.image ? (
+                <img
+                  src={user.image}
+                  alt={user.name}
+                  className="h-8 w-8 rounded-full object-cover"
+                />
+              ) : (
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold">
+                  {avatarFallback(user.name, user.email)}
+                </div>
+              )}
+              <div className="min-w-0 text-left">
+                <p className="truncate text-sm font-semibold">{user.name}</p>
+                <p className="truncate text-xs text-black/60">{user.email}</p>
               </div>
-            )}
-            <div className="min-w-0 text-left">
-              <p className="truncate text-sm font-semibold">{user.name}</p>
-              <p className="truncate text-xs text-black/60">{user.email}</p>
-            </div>
-          </button>
+            </button>
 
-          {isUserMenuOpen ? (
-            <div className="absolute right-0 top-[calc(100%+4px)] z-30 min-w-[160px] rounded-lg border border-black/10 bg-white p-1 shadow-[0_8px_20px_rgba(0,0,0,0.14)]">
-              <button
-                type="button"
-                onClick={() => signOut({ callbackUrl: "/" })}
-                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-black/80 transition hover:bg-black/5"
-              >
-                Sign out
-              </button>
-            </div>
-          ) : null}
-        </div>
+            {isUserMenuOpen ? (
+              <div className="absolute right-0 top-[calc(100%+4px)] z-30 min-w-[160px] rounded-lg border border-black/10 bg-white p-1 shadow-[0_8px_20px_rgba(0,0,0,0.14)]">
+                <button
+                  type="button"
+                  onClick={() => signOut({ callbackUrl: "/" })}
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-black/80 transition hover:bg-black/5"
+                >
+                  Sign out
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </header>
   );
