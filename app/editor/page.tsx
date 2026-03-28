@@ -20,7 +20,7 @@ export default async function EditorPage({
   }
 
   const userId =
-    (session.user as { azureId?: string }).azureId ??
+    (session.user as { authUserId?: string }).authUserId ??
     session.user.email ??
     "unknown-user";
 

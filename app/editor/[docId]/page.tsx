@@ -6,44 +6,45 @@ import { authOptions } from "@/app/api/auth/authOptions";
 import { EditorShell } from "../EditorShell";
 
 export default async function DocumentEditorPage({
-  params,
+    params,
 }: {
-  params: Promise<{ docId: string }>;
+    params: Promise<{ docId: string }>;
 }) {
-  const session = await getServerSession(authOptions);
-  const { docId } = await params;
+    const session = await getServerSession(authOptions);
+    const { docId } = await params;
 
-  if (!session?.user) {
-    redirect("/");
-  }
+    if (!session?.user) {
+        redirect("/");
+    }
 
-  let decodedDocUrl = "";
-  try {
-    decodedDocUrl = decodeURIComponent(docId);
-  } catch {
-    notFound();
-  }
+    let decodedDocUrl = "";
+    try {
+        decodedDocUrl = decodeURIComponent(docId);
+    } catch {
+        notFound();
+    }
 
-  if (!decodedDocUrl) {
-    notFound();
-  }
+    if (!decodedDocUrl) {
+        notFound();
+    }
 
-  const userId =
-    (session.user as { azureId?: string }).azureId ??
-    session.user.email ??
-    "unknown-user";
+    const userId =
+        (session.user as { authUserId?: string }).authUserId ??
+        session.user.email ??
+        "unknown-user";
 
-  return (
-    <Suspense fallback={null}>
-      <EditorShell
-        docUrl={decodedDocUrl as AutomergeUrl}
-        user={{
-          id: userId,
-          name: session.user.name ?? "Unknown User",
-          email: session.user.email ?? "",
-          image: session.user.image ?? null,
-        }}
-      />
-    </Suspense>
-  );
+
+    return (
+        <Suspense fallback={null}>
+            <EditorShell
+                docUrl={decodedDocUrl as AutomergeUrl}
+                user={{
+                    id: userId,
+                    name: session.user.name ?? "Unknown User",
+                    email: session.user.email ?? "",
+                    image: session.user.image ?? null,
+                }}
+            />
+        </Suspense>
+    );
 }
