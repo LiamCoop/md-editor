@@ -7,7 +7,6 @@
     "build": "prisma generate && next build",
     "predeploy": "prisma migrate deploy",
     "start": "next start",
-    "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
