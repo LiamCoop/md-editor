@@ -46,14 +46,23 @@ export function useCodeMirrorEditor({
 
     // Keep a ref to broadcastCursor so the CM update listener always has the latest
     const broadcastCursorRef = useRef(broadcastCursor);
-    broadcastCursorRef.current = broadcastCursor;
 
     const onSelectionChangeRef = useRef(onSelectionChange);
-    onSelectionChangeRef.current = onSelectionChange;
 
     // Keep a ref to the doc handle for use inside CM extensions
     const activeDocHandleRef = useRef(activeDocHandle);
-    activeDocHandleRef.current = activeDocHandle;
+
+    useEffect(() => {
+        broadcastCursorRef.current = broadcastCursor;
+    }, [broadcastCursor]);
+
+    useEffect(() => {
+        onSelectionChangeRef.current = onSelectionChange;
+    }, [onSelectionChange]);
+
+    useEffect(() => {
+        activeDocHandleRef.current = activeDocHandle;
+    }, [activeDocHandle]);
 
     useEffect(() => {
         activeDocContentRef.current = activeDoc?.content ?? "";

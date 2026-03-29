@@ -2,10 +2,16 @@
 
 import { useDocument, useDocuments, useRepo } from "@automerge/automerge-repo-react-hooks";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import type { DocumentIndexDoc, MarkdownDoc } from "@/lib/types";
+import { startTransition, useEffect, useMemo, useState } from "react";
+import { migrateDocumentsFromLocalStorage, registerDocument } from "./actions";
+import type {
+  DocumentIndexDoc,
+  DocumentListItem,
+  MarkdownDoc,
+} from "@/lib/types";
 import { avatarFallback } from "./utils";
 
 const DICEWARE_WORDS = [
@@ -67,6 +73,7 @@ const DICEWARE_WORDS = [
 ];
 
 interface DocumentLibraryProps {
+  documents: DocumentListItem[];
   user: {
     id: string;
     name: string;
@@ -89,61 +96,98 @@ function isValidAutomergeUrl(value: string): value is AutomergeUrl {
   return /^automerge:[A-Za-z0-9_-]+$/.test(value.trim());
 }
 
-export function DocumentLibrary({ user }: DocumentLibraryProps) {
+export function DocumentLibrary({ documents, user }: DocumentLibraryProps) {
   const repo = useRepo();
   const router = useRouter();
-  const [indexUrl, setIndexUrl] = useState<AutomergeUrl | undefined>(undefined);
+  const indexStorageKey = `md-editor:index-url:${user.id}`;
+  const migrationFlagStorageKey = `md-editor:index-migrated:${user.id}`;
+  const [migrationIndexUrl] = useState<AutomergeUrl | undefined>(() =>
+    typeof window === "undefined"
+      ? undefined
+      : ((window.localStorage.getItem(indexStorageKey) as AutomergeUrl | null) ?? undefined),
+  );
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newDocumentInput, setNewDocumentInput] = useState(generateDicewareTitle());
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
-  const indexStorageKey = `md-editor:index-url:${user.id}`;
+  const [isCreatingDocument, setIsCreatingDocument] = useState(false);
+  const [migrationComplete, setMigrationComplete] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.localStorage.getItem(migrationFlagStorageKey) === "true",
+  );
 
-  useEffect(() => {
-    const existingIndexUrl = window.localStorage.getItem(indexStorageKey) as
-      | AutomergeUrl
-      | null;
-    if (existingIndexUrl) {
-      setIndexUrl(existingIndexUrl);
-      return;
-    }
-    const handle = repo.create<DocumentIndexDoc>({ documents: [] });
-    window.localStorage.setItem(indexStorageKey, handle.url);
-    setIndexUrl(handle.url);
-  }, [indexStorageKey, repo]);
-
-  const [indexDoc, changeIndexDoc] = useDocument<DocumentIndexDoc>(indexUrl, {
+  const [indexDoc] = useDocument<DocumentIndexDoc>(migrationIndexUrl, {
     suspense: false,
   });
 
-  const documentUrls = useMemo(
+  const migrationDocumentUrls = useMemo(
     () => (indexDoc?.documents ?? []).map((entry) => entry.url as AutomergeUrl),
     [indexDoc],
   );
-  const [documents] = useDocuments<MarkdownDoc>(documentUrls, { suspense: false });
+  const [migrationDocuments] = useDocuments<MarkdownDoc>(migrationDocumentUrls, {
+    suspense: false,
+  });
 
-  const createDocument = (title: string) => {
-    if (!indexDoc) {
+  useEffect(() => {
+    if (
+      migrationComplete ||
+      !migrationIndexUrl ||
+      !indexDoc ||
+      indexDoc.documents.length === 0
+    ) {
       return;
     }
+
+    let cancelled = false;
+
+    const migrate = async () => {
+      const entries = indexDoc.documents.map((entry) => {
+        const existingDoc = migrationDocuments.get(entry.url as AutomergeUrl);
+        return {
+          url: entry.url,
+          title: existingDoc?.title,
+          createdAt: entry.createdAt,
+        };
+      });
+
+      await migrateDocumentsFromLocalStorage(entries);
+
+      if (cancelled) {
+        return;
+      }
+
+      window.localStorage.setItem(migrationFlagStorageKey, "true");
+      setMigrationComplete(true);
+      router.refresh();
+    };
+
+    void migrate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    indexDoc,
+    migrationComplete,
+    migrationDocuments,
+    migrationFlagStorageKey,
+    migrationIndexUrl,
+    router,
+  ]);
+
+  const createDocument = async (title: string) => {
+    const nextTitle = title.trim() || generateDicewareTitle();
     const handle = repo.create<MarkdownDoc>({
-      title: title.trim() || generateDicewareTitle(),
+      title: nextTitle,
       content: "",
       comments: [],
     });
-    changeIndexDoc((doc) => {
-      doc.documents.push({
-        url: handle.url,
-        createdAt: Date.now(),
-        createdBy: user.id,
-      });
-    });
-    router.push(`/editor/${encodeURIComponent(handle.url)}`);
+    const document = await registerDocument(handle.url, nextTitle);
+    router.push(`/editor/${encodeURIComponent(document.id)}`);
+    router.refresh();
   };
 
   const handleOpenCreateModal = async () => {
-    if (!indexDoc) {
-      return;
-    }
     const fallbackTitle = generateDicewareTitle();
     setNewDocumentInput(fallbackTitle);
     setIsCreateModalOpen(true);
@@ -170,8 +214,13 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
       return;
     }
 
-    createDocument(input);
-    setIsCreateModalOpen(false);
+    setIsCreatingDocument(true);
+    startTransition(() => {
+      void createDocument(input).finally(() => {
+        setIsCreatingDocument(false);
+        setIsCreateModalOpen(false);
+      });
+    });
   };
 
   const handleCopyUrl = async (url: string) => {
@@ -187,6 +236,14 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
     } catch {
       // Ignore clipboard permission errors.
     }
+  };
+
+  const getDocumentShareUrl = (documentId: string) => {
+    if (typeof window === "undefined") {
+      return `/editor/${encodeURIComponent(documentId)}`;
+    }
+
+    return `${window.location.origin}/editor/${encodeURIComponent(documentId)}`;
   };
 
   const submitLabel = isValidAutomergeUrl(newDocumentInput)
@@ -206,9 +263,11 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
           <div className="flex items-center gap-3">
             <div className="flex min-w-0 items-center gap-3 rounded-lg border border-black/10 bg-white px-3 py-2">
               {user.image ? (
-                <img
+                <Image
                   src={user.image}
                   alt={user.name}
+                  width={32}
+                  height={32}
                   className="h-8 w-8 rounded-full object-cover"
                 />
               ) : (
@@ -224,7 +283,6 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
             <button
               type="button"
               onClick={handleOpenCreateModal}
-              disabled={!indexDoc}
               className="rounded-md bg-black px-3 py-2 text-sm font-medium text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Add Document
@@ -232,41 +290,42 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
           </div>
         </header>
 
-        {indexDoc && indexDoc.documents.length === 0 ? (
+        {documents.length === 0 ? (
           <div className="rounded-lg border border-dashed border-black/20 p-6 text-sm text-black/70">
             No documents yet. Create one to start editing.
           </div>
         ) : null}
 
         <div className="space-y-2">
-          {(indexDoc?.documents ?? []).map((entry) => {
-            const doc = documents.get(entry.url as AutomergeUrl);
+          {documents.map((document) => {
             return (
               <div
-                key={entry.url}
+                key={document.id}
                 className="rounded-lg border border-black/10 bg-white px-4 py-3 transition hover:border-black/25 hover:bg-black/[0.02]"
               >
-                <Link
-                  href={`/editor/${encodeURIComponent(entry.url)}`}
-                  className="block truncate text-base font-medium"
-                >
-                  {doc?.title ?? "Untitled"}
-                </Link>
-                <div className="mt-1 flex items-center gap-2">
+                <div className="flex items-center gap-2">
                   <Link
-                    href={`/editor/${encodeURIComponent(entry.url)}`}
-                    className="truncate text-xs text-black/60"
+                    href={`/editor/${encodeURIComponent(document.id)}`}
+                    className="block min-w-0 truncate text-base font-medium"
                   >
-                    {entry.url}
+                    {document.title}
                   </Link>
                   <button
                     type="button"
-                    onClick={() => handleCopyUrl(entry.url)}
-                    className="rounded border border-black/15 px-2 py-0.5 text-[11px] font-medium text-black/70 transition hover:bg-black/5"
-                    aria-label={`Copy ${doc?.title ?? "document"} URL`}
+                    onClick={() => handleCopyUrl(getDocumentShareUrl(document.id))}
+                    className="shrink-0 rounded border border-black/15 px-2 py-0.5 text-[11px] font-medium text-black/70 transition hover:bg-black/5"
+                    aria-label={`Copy link to ${document.title}`}
                   >
-                    {copiedUrl === entry.url ? "Copied" : "Copy"}
+                    {copiedUrl === getDocumentShareUrl(document.id) ? "Copied" : "Copy link"}
                   </button>
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-xs text-black/60">
+                  <span className="rounded-full bg-black/5 px-2 py-0.5 font-medium text-black/70">
+                    {document.role === "owner" ? "Owner" : "Shared with you"}
+                  </span>
+                  <span className="rounded-full bg-black/5 px-2 py-0.5 font-medium text-black/70">
+                    {document.visibility === "LINK" ? "Anyone with link" : "Private"}
+                  </span>
                 </div>
               </div>
             );
@@ -303,9 +362,10 @@ export function DocumentLibrary({ user }: DocumentLibraryProps) {
               <button
                 type="button"
                 onClick={handleCreateModalSubmit}
+                disabled={isCreatingDocument}
                 className="rounded-md bg-black px-3 py-2 text-sm font-medium text-white transition hover:bg-black/85"
               >
-                {submitLabel}
+                {isCreatingDocument ? "Working..." : submitLabel}
               </button>
             </div>
           </div>

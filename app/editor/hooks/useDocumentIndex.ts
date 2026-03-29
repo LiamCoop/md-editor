@@ -12,20 +12,22 @@ export function useDocumentIndex({
 }) {
     const repo = useRepo();
     const indexStorageKey = `md-editor:index-url:${userId}`;
-    const [indexUrl, setIndexUrl] = useState<AutomergeUrl | undefined>(undefined);
+    const [indexUrl] = useState<AutomergeUrl | undefined>(() => {
+        if (typeof window === "undefined") {
+            return undefined;
+        }
 
-    useEffect(() => {
         const existingIndexUrl = window.localStorage.getItem(indexStorageKey) as
             | AutomergeUrl
             | null;
         if (existingIndexUrl) {
-            setIndexUrl(existingIndexUrl);
-            return;
+            return existingIndexUrl;
         }
+
         const handle = repo.create<DocumentIndexDoc>({ documents: [] });
         window.localStorage.setItem(indexStorageKey, handle.url);
-        setIndexUrl(handle.url);
-    }, [indexStorageKey, repo]);
+        return handle.url;
+    });
 
     const [indexDoc, changeIndexDoc] = useDocument<DocumentIndexDoc>(indexUrl, {
         suspense: false,

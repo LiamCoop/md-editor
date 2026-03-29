@@ -2,15 +2,27 @@
 
 import type { Repo } from "@automerge/automerge-repo";
 import { RepoContext } from "@automerge/automerge-repo-react-hooks";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { getRepo } from "@/lib/automerge";
 
-export function AutomergeProvider({ children }: { children: React.ReactNode }) {
-  const [repo, setRepo] = useState<Repo | null>(null);
+function subscribe() {
+  return () => {};
+}
 
-  useEffect(() => {
-    setRepo(getRepo());
-  }, []);
+function getClientSnapshot() {
+  return getRepo();
+}
+
+function getServerSnapshot(): Repo | null {
+  return null;
+}
+
+export function AutomergeProvider({ children }: { children: React.ReactNode }) {
+  const repo = useSyncExternalStore(
+    subscribe,
+    getClientSnapshot,
+    getServerSnapshot,
+  );
 
   if (!repo) {
     return null;

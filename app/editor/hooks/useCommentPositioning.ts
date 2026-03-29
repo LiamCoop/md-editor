@@ -52,6 +52,12 @@ export function useCommentPositioning({
 
     const commentCardRefs = useRef<Record<string, HTMLElement | null>>({});
     const pendingCommentRef = useRef<HTMLElement | null>(null);
+    const setCommentCardRef = useCallback(
+        (commentId: string, element: HTMLElement | null) => {
+            commentCardRefs.current[commentId] = element;
+        },
+        [],
+    );
 
     const getAnchorTopForOffset = useCallback((offset: number): number | null => {
         const view = editorViewRef.current;
@@ -205,8 +211,14 @@ export function useCommentPositioning({
 
     // Recompute positions on content or selection change
     useEffect(() => {
-        updateFloatingCommentButtonPosition();
-        updateAnchoredCommentPositions();
+        const frame = window.requestAnimationFrame(() => {
+            updateFloatingCommentButtonPosition();
+            updateAnchoredCommentPositions();
+        });
+
+        return () => {
+            window.cancelAnimationFrame(frame);
+        };
     }, [updateFloatingCommentButtonPosition, updateAnchoredCommentPositions, activeDocContent]);
 
     // Deferred rAF recalc after comment UI state changes
@@ -256,7 +268,7 @@ export function useCommentPositioning({
         floatingCommentButtonPosition,
         anchoredCommentPositions,
         pendingCommentTop,
-        commentCardRefs,
+        setCommentCardRef,
         pendingCommentRef,
     };
 }

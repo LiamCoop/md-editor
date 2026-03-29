@@ -4,7 +4,13 @@
       "WebFetch(domain:automerge.org)",
       "Bash(npm info:*)",
       "Skill(railway:use-railway)",
-      "Bash(git remote:*)"
+      "Bash(git remote:*)",
+      "Bash(find /Users/lco/personal/md-editor -type f \\\\\\( -name \"use*.ts\" -o -name \"use*.tsx\" \\\\\\) 2>/dev/null | grep -v node_modules)",
+      "Bash(find /Users/lco/personal/md-editor/app -type f \\\\\\( -name \"*.ts\" -o -name \"*.tsx\" \\\\\\) 2>/dev/null | head -30)",
+      "WebFetch(domain:nextra.site)",
+      "WebFetch(domain:the-guild.dev)",
+      "WebSearch",
+      "WebFetch(domain:docs.partykit.io)"
     ]
   }
 }

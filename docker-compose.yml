@@ -1,4 +1,15 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=md_editor
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
   sync-server:
     image: ghcr.io/automerge/automerge-repo-sync-server:main
     ports:
@@ -9,21 +20,22 @@ services:
       - PORT=3030
       - DATA_DIR=/data
 
-  client:
-    build:
-      context: ./client
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_SYNC_SERVER_URL=ws://localhost:3030
-      - AZURE_AD_CLIENT_ID=${AZURE_AD_CLIENT_ID}
-      - AZURE_AD_CLIENT_SECRET=${AZURE_AD_CLIENT_SECRET}
-      - AZURE_AD_TENANT_ID=${AZURE_AD_TENANT_ID}
-      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
-    depends_on:
-      - sync-server
+  #client:
+  #  build:
+  #    context: ./client
+  #    dockerfile: Dockerfile
+  #  ports:
+  #    - "3000:3000"
+  #  environment:
+  #    - NEXT_PUBLIC_SYNC_SERVER_URL=ws://localhost:3030
+  #    - AZURE_AD_CLIENT_ID=${AZURE_AD_CLIENT_ID}
+  #    - AZURE_AD_CLIENT_SECRET=${AZURE_AD_CLIENT_SECRET}
+  #    - AZURE_AD_TENANT_ID=${AZURE_AD_TENANT_ID}
+  #    - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3000}
+  #    - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+  #  depends_on:
+  #    - sync-server
 
 volumes:
+  pg-data:
   sync-data:

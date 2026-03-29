@@ -1,8 +1,11 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
 import { useState } from "react";
+import type { DocumentMemberRecord, DocumentVisibility } from "@/lib/types";
+import { ShareDialog } from "./ShareDialog";
 import { avatarFallback, type ViewMode } from "./utils";
 
 interface HeaderCollaborator {
@@ -13,6 +16,12 @@ interface HeaderCollaborator {
 }
 
 interface EditorHeaderProps {
+  document: {
+    id: string;
+    visibility: DocumentVisibility;
+    role: "owner" | "member";
+    members: DocumentMemberRecord[];
+  };
   title: string;
   onTitleChange: (nextTitle: string) => void;
   user: {
@@ -29,9 +38,11 @@ interface EditorHeaderProps {
 function CollaboratorAvatar({ collaborator }: { collaborator: HeaderCollaborator }) {
   if (collaborator.image) {
     return (
-      <img
+      <Image
         src={collaborator.image}
         alt={collaborator.displayName}
+        width={32}
+        height={32}
         className="h-8 w-8 rounded-full border border-black/10 object-cover"
       />
     );
@@ -78,9 +89,19 @@ const viewModeButtons: { mode: ViewMode; label: string; icon: React.ReactNode }[
   },
 ];
 
-export function EditorHeader({ title, onTitleChange, user, collaborators: rawCollaborators, viewMode, onViewModeChange, showUserMenu = true }: EditorHeaderProps) {
+export function EditorHeader({
+  document,
+  title,
+  onTitleChange,
+  user,
+  collaborators: rawCollaborators,
+  viewMode,
+  onViewModeChange,
+  showUserMenu = true,
+}: EditorHeaderProps) {
   const [isCollaboratorPopoverOpen, setIsCollaboratorPopoverOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
   const collaborators = Array.from(
     new Map(rawCollaborators.map((c) => [c.userId, c])).values(),
   );
@@ -105,6 +126,16 @@ export function EditorHeader({ title, onTitleChange, user, collaborators: rawCol
         />
       </div>
       <div className="flex min-w-0 items-center gap-3">
+        {document.role === "owner" ? (
+          <button
+            type="button"
+            onClick={() => setIsShareDialogOpen(true)}
+            className="rounded-md border border-black/15 bg-white px-3 py-2 text-sm font-medium transition hover:bg-black/5"
+          >
+            Share
+          </button>
+        ) : null}
+
         <div className="flex overflow-hidden rounded-lg border border-black/15">
           {viewModeButtons.map(({ mode, label, icon }) => (
             <button
@@ -179,9 +210,11 @@ export function EditorHeader({ title, onTitleChange, user, collaborators: rawCol
               className="flex min-w-0 items-center gap-3 rounded-lg border border-black/10 bg-white px-3 py-2 transition hover:bg-black/5"
             >
               {user.image ? (
-                <img
+                <Image
                   src={user.image}
                   alt={user.name}
+                  width={32}
+                  height={32}
                   className="h-8 w-8 rounded-full object-cover"
                 />
               ) : (
@@ -209,6 +242,16 @@ export function EditorHeader({ title, onTitleChange, user, collaborators: rawCol
           </div>
         ) : null}
       </div>
+
+      {isShareDialogOpen ? (
+        <ShareDialog
+          documentId={document.id}
+          initialMembers={document.members}
+          initialVisibility={document.visibility}
+          isOpen={isShareDialogOpen}
+          onClose={() => setIsShareDialogOpen(false)}
+        />
+      ) : null}
     </header>
   );
 }

@@ -39,3 +39,38 @@ export interface DocumentIndexEntry {
 export interface DocumentIndexDoc {
   documents: DocumentIndexEntry[];
 }
+
+export type DocumentVisibility = "PRIVATE" | "LINK";
+
+export interface DocumentListItem {
+  id: string;
+  automergeIdentifier: string;
+  title: string;
+  visibility: DocumentVisibility;
+  role: "owner" | "member";
+  owner: {
+    id: string;
+    name: string | null;
+    email: string | null;
+    image: string | null;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DocumentMemberRecord {
+  id: string;
+  userId: string;
+  createdAt: string;
+  user: {
+    name: string | null;
+    email: string | null;
+    image: string | null;
+  };
+}
+
+export interface MigratableDocumentEntry {
+  url: string;
+  title?: string;
+  createdAt?: number;
+}

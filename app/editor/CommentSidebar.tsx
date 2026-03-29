@@ -1,3 +1,4 @@
+import Image from "next/image";
 import type { Comment } from "@/lib/types";
 import type { MutableRefObject } from "react";
 import { avatarFallback, formatCommentDate, type AnchoredCommentPosition, type PendingComment } from "./utils";
@@ -11,7 +12,7 @@ interface CommentSidebarProps {
     pendingCommentTop: number | null;
     pendingCommentRef: MutableRefObject<HTMLElement | null>;
     anchoredCommentPositions: Record<string, AnchoredCommentPosition>;
-    commentCardRefs: MutableRefObject<Record<string, HTMLElement | null>>;
+    setCommentCardRef: (commentId: string, element: HTMLElement | null) => void;
     hoveredCommentId: string | null;
     setHoveredCommentId: (id: string | null) => void;
     replyingToCommentId: string | null;
@@ -44,7 +45,7 @@ export function CommentSidebar({
     pendingCommentTop,
     pendingCommentRef,
     anchoredCommentPositions,
-    commentCardRefs,
+    setCommentCardRef,
     hoveredCommentId,
     setHoveredCommentId,
     replyingToCommentId,
@@ -77,9 +78,11 @@ export function CommentSidebar({
                 >
                     <div className="mb-2 flex items-center gap-1.5">
                         {user.image ? (
-                            <img
+                            <Image
                                 src={user.image}
                                 alt={user.name}
+                                width={20}
+                                height={20}
                                 className="h-5 w-5 rounded-full object-cover"
                             />
                         ) : (
@@ -128,7 +131,7 @@ export function CommentSidebar({
                         comment={comment}
                         user={user}
                         anchoredPosition={anchoredCommentPositions[comment.id]}
-                        commentCardRefs={commentCardRefs}
+                        setCommentCardRef={setCommentCardRef}
                         isHovered={hoveredCommentId === comment.id}
                         setHoveredCommentId={setHoveredCommentId}
                         hoveredCommentId={hoveredCommentId}
@@ -161,7 +164,7 @@ function CommentCard({
     comment,
     user,
     anchoredPosition,
-    commentCardRefs,
+    setCommentCardRef,
     isHovered,
     setHoveredCommentId,
     hoveredCommentId,
@@ -187,7 +190,7 @@ function CommentCard({
     comment: Comment;
     user: { id: string; name: string; email: string; image: string | null };
     anchoredPosition: AnchoredCommentPosition | undefined;
-    commentCardRefs: MutableRefObject<Record<string, HTMLElement | null>>;
+    setCommentCardRef: (commentId: string, element: HTMLElement | null) => void;
     isHovered: boolean;
     setHoveredCommentId: (id: string | null) => void;
     hoveredCommentId: string | null;
@@ -221,7 +224,7 @@ function CommentCard({
     return (
         <article
             ref={(element) => {
-                commentCardRefs.current[comment.id] = element;
+                setCommentCardRef(comment.id, element);
             }}
             onMouseEnter={() => {
                 setHoveredCommentId(comment.id);
@@ -242,9 +245,11 @@ function CommentCard({
             <div className="flex items-start justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-1.5">
                     {comment.authorId === user.id && user.image ? (
-                        <img
+                        <Image
                             src={user.image}
                             alt={comment.authorName}
+                            width={20}
+                            height={20}
                             className="h-5 w-5 rounded-full object-cover"
                         />
                     ) : (

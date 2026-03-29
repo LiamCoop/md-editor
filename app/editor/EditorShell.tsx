@@ -2,19 +2,25 @@
 
 import { useDocument, useDocHandle } from "@automerge/automerge-repo-react-hooks";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
-import { useCallback, useMemo, useState } from "react";
-import type { MarkdownDoc } from "@/lib/types";
+import { startTransition, useCallback, useMemo, useRef, useState } from "react";
+import { updateDocumentTitle } from "./actions";
+import type { DocumentMemberRecord, DocumentVisibility, MarkdownDoc } from "@/lib/types";
 import type { ViewMode } from "./utils";
 import { EditorHeader } from "./EditorHeader";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { CommentSidebar } from "./CommentSidebar";
-import { useDocumentIndex } from "./hooks/useDocumentIndex";
 import { useCodeMirrorEditor } from "./hooks/useCodeMirrorEditor";
 import { useComments } from "./hooks/useComments";
 import { useCommentPositioning } from "./hooks/useCommentPositioning";
 
 
 interface EditorShellProps {
+    document: {
+        id: string;
+        visibility: DocumentVisibility;
+        role: "owner" | "member";
+        members: DocumentMemberRecord[];
+    };
     user: {
         id: string;
         name: string;
@@ -24,9 +30,7 @@ interface EditorShellProps {
     docUrl: AutomergeUrl;
 }
 
-export function EditorShell({ user, docUrl }: EditorShellProps) {
-    useDocumentIndex({ userId: user.id, docUrl });
-
+export function EditorShell({ document, user, docUrl }: EditorShellProps) {
     const [activeDoc, changeActiveDoc] = useDocument<MarkdownDoc>(docUrl, {
         suspense: true,
     });
@@ -36,6 +40,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
 
     const [viewMode, setViewMode] = useState<ViewMode>("edit");
     const [selectionRange, setSelectionRange] = useState({ start: 0, end: 0 });
+    const titleSyncTimeoutRef = useRef<number | null>(null);
 
     const orderedSelection = useMemo(() => {
         const start = Math.min(selectionRange.start, selectionRange.end);
@@ -78,7 +83,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
         floatingCommentButtonPosition,
         anchoredCommentPositions,
         pendingCommentTop,
-        commentCardRefs,
+        setCommentCardRef,
         pendingCommentRef,
     } = useCommentPositioning({
         editorViewRef,
@@ -103,16 +108,29 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
 
     const showSidebar = commentState.showCommentsSidebar && viewMode === "edit";
 
+    const handleTitleChange = (nextTitle: string) => {
+        changeActiveDoc((doc) => {
+            doc.title = nextTitle;
+        });
+
+        if (titleSyncTimeoutRef.current) {
+            window.clearTimeout(titleSyncTimeoutRef.current);
+        }
+
+        titleSyncTimeoutRef.current = window.setTimeout(() => {
+            startTransition(() => {
+                void updateDocumentTitle(document.id, nextTitle);
+            });
+        }, 500);
+    };
+
     return (
         <div className="min-h-screen bg-background text-foreground">
             <div className="w-full border-b border-black/10 bg-background px-6 py-4">
                 <EditorHeader
                     title={activeDoc.title}
-                    onTitleChange={(nextTitle) =>
-                        changeActiveDoc((doc) => {
-                            doc.title = nextTitle;
-                        })
-                    }
+                    onTitleChange={handleTitleChange}
+                    document={document}
                     user={user}
                     collaborators={headerCollaborators}
                     viewMode={viewMode}
@@ -165,7 +183,7 @@ export function EditorShell({ user, docUrl }: EditorShellProps) {
                             pendingCommentTop={pendingCommentTop}
                             pendingCommentRef={pendingCommentRef}
                             anchoredCommentPositions={anchoredCommentPositions}
-                            commentCardRefs={commentCardRefs}
+                            setCommentCardRef={setCommentCardRef}
                             hoveredCommentId={commentState.hoveredCommentId}
                             setHoveredCommentId={commentState.setHoveredCommentId}
                             replyingToCommentId={commentState.replyingToCommentId}

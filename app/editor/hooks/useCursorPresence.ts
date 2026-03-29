@@ -3,7 +3,7 @@ import {
     usePresence,
 } from "@automerge/automerge-repo-react-hooks";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
-import { useCallback, useMemo, useRef } from "react";
+import { useMemo } from "react";
 import type { MarkdownDoc } from "@/lib/types";
 
 const COLLABORATOR_COLORS = [
@@ -79,15 +79,12 @@ export function useCursorPresence({
         },
     });
 
-    const updateRef = useRef(update);
-    updateRef.current = update;
-
     const broadcastCursor = useMemo(
         () =>
             throttle((head: string, anchor: string) => {
-                updateRef.current("cursor", { head, anchor });
+                update("cursor", { head, anchor });
             }, 50),
-        [],
+        [update],
     );
 
     const { collaborators, peerCursorData } = useMemo(() => {
