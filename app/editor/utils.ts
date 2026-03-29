@@ -52,8 +52,32 @@ export function avatarFallback(name: string, email: string): string {
 }
 
 export function formatCommentDate(timestamp: number): string {
-    return new Intl.DateTimeFormat(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-    }).format(new Date(timestamp));
+    const date = new Date(timestamp);
+    const now = new Date();
+    const twelveMonthsAgo = new Date(now);
+    twelveMonthsAgo.setFullYear(now.getFullYear() - 1);
+
+    const time = new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+    })
+        .format(date)
+        .replace(/\s?AM$/, "am")
+        .replace(/\s?PM$/, "pm");
+
+    const dateOptions: Intl.DateTimeFormatOptions =
+        date < twelveMonthsAgo
+            ? {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+            }
+            : {
+                month: "short",
+                day: "numeric",
+            };
+
+    const shortDate = new Intl.DateTimeFormat(undefined, dateOptions).format(date);
+
+    return `${time} ${shortDate}`;
 }

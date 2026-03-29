@@ -1,7 +1,22 @@
 import Image from "next/image";
 import type { Comment } from "@/lib/types";
-import type { MutableRefObject } from "react";
+import type { KeyboardEvent, MutableRefObject } from "react";
 import { avatarFallback, formatCommentDate, type AnchoredCommentPosition, type PendingComment } from "./utils";
+
+function handleSubmitShortcut(
+    event: KeyboardEvent<HTMLTextAreaElement>,
+    callback: () => void,
+    enabled: boolean,
+) {
+    if (!enabled) {
+        return;
+    }
+
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        callback();
+    }
+}
 
 interface CommentSidebarProps {
     user: { id: string; name: string; email: string; image: string | null };
@@ -100,6 +115,13 @@ export function CommentSidebar({
                                 ...pendingComment,
                                 body: event.target.value,
                             })
+                        }
+                        onKeyDown={(event) =>
+                            handleSubmitShortcut(
+                                event,
+                                submitPendingComment,
+                                Boolean(pendingComment.body.trim()),
+                            )
                         }
                         className="h-16 w-full resize-none rounded-lg border border-[#1a73e8] bg-white px-3 py-2 text-sm leading-5 outline-none focus:border-[#1a73e8]"
                         placeholder="Comment or add others with @"
@@ -320,6 +342,13 @@ function CommentCard({
                         onChange={(event) =>
                             setEditingCommentDraft(event.target.value)
                         }
+                        onKeyDown={(event) =>
+                            handleSubmitShortcut(
+                                event,
+                                () => saveEditedComment(comment.id),
+                                Boolean(editingCommentDraft.trim()),
+                            )
+                        }
                         className="h-16 w-full resize-y rounded-lg border border-[#1a73e8] bg-white px-3 py-2 text-sm outline-none focus:border-[#1a73e8]"
                         placeholder="Edit your comment..."
                     />
@@ -341,13 +370,13 @@ function CommentCard({
                         </button>
                     </div>
                 </div>
-            ) : (
+            ) : !isResolved ? (
                 <div className={`mt-2 rounded-lg px-3 py-2 ${isHovered ? "bg-[#c9d1df]" : ""}`}>
                     <p className="whitespace-pre-wrap text-sm leading-5 text-black/70">
                         {comment.body}
                     </p>
                 </div>
-            )}
+            ) : null}
             {isResolved ? (
                 <p className="mt-2 text-sm text-black/55">
                     Thread resolved
@@ -427,6 +456,13 @@ function CommentCard({
                                                 onChange={(event) =>
                                                     setEditingCommentDraft(event.target.value)
                                                 }
+                                                onKeyDown={(event) =>
+                                                    handleSubmitShortcut(
+                                                        event,
+                                                        () => saveEditedReply(comment.id, reply.id),
+                                                        Boolean(editingCommentDraft.trim()),
+                                                    )
+                                                }
                                                 className="h-12 w-full resize-y rounded-lg border border-[#1a73e8] bg-white px-3 py-2 text-sm outline-none focus:border-[#1a73e8]"
                                                 placeholder="Edit your reply..."
                                             />
@@ -463,6 +499,13 @@ function CommentCard({
                     <textarea
                         value={replyDraft}
                         onChange={(event) => setReplyDraft(event.target.value)}
+                        onKeyDown={(event) =>
+                            handleSubmitShortcut(
+                                event,
+                                () => submitReply(comment.id),
+                                Boolean(replyDraft.trim()),
+                            )
+                        }
                         className="h-10 w-full resize-none rounded-lg border border-[#1a73e8] bg-white px-3 py-2 text-sm outline-none focus:border-[#1a73e8]"
                         placeholder="Write a reply..."
                     />
@@ -496,17 +539,19 @@ function CommentCard({
                 >
                     {isResolved ? "Re-open" : "Resolve"}
                 </button>
-                <button
-                    type="button"
-                    onClick={() => {
-                        setReplyingToCommentId(comment.id);
-                        setReplyDraft("");
-                    }}
-                    disabled={isResolved || isEditing}
-                    className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
-                >
-                    Reply
-                </button>
+                {!isResolved ? (
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setReplyingToCommentId(comment.id);
+                            setReplyDraft("");
+                        }}
+                        disabled={isEditing}
+                        className="rounded-full bg-[#1a73e8] px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-[#1765c5] disabled:cursor-not-allowed disabled:bg-black/15 disabled:text-black/35"
+                    >
+                        Reply
+                    </button>
+                ) : null}
             </div>
         </article>
     );
