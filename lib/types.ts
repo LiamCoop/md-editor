@@ -69,6 +69,13 @@ export interface DocumentMemberRecord {
   };
 }
 
+export interface ShareCandidate {
+  id: string;
+  name: string | null;
+  email: string | null;
+  image: string | null;
+}
+
 export interface MigratableDocumentEntry {
   url: string;
   title?: string;

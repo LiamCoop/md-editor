@@ -7,6 +7,7 @@ import type {
   DocumentListItem,
   DocumentMemberRecord,
   MigratableDocumentEntry,
+  ShareCandidate,
 } from "@/lib/types";
 import { getOrCreateUser, requireSession } from "@/lib/auth-helpers";
 import { db } from "@/lib/db";
@@ -230,6 +231,48 @@ export async function addDocumentMember(documentId: string, email: string) {
   revalidatePath(`/editor/${encodeURIComponent(document.id)}`);
 }
 
+export async function addDocumentMemberByUserId(documentId: string, userId: string) {
+  const { document, role } = await requireDocumentAccess(documentId);
+
+  if (role !== "owner") {
+    throw new Error("Only the owner can add members.");
+  }
+
+  const normalizedUserId = userId.trim();
+  if (!normalizedUserId) {
+    throw new Error("User is required.");
+  }
+
+  const targetUser = await db.user.findUnique({
+    where: { id: normalizedUserId },
+  });
+
+  if (!targetUser) {
+    throw new Error("No user found with that selection.");
+  }
+
+  if (targetUser.id === document.ownerId) {
+    throw new Error("The owner already has access.");
+  }
+
+  await db.documentMember.upsert({
+    where: {
+      documentId_userId: {
+        documentId: document.id,
+        userId: targetUser.id,
+      },
+    },
+    update: {},
+    create: {
+      documentId: document.id,
+      userId: targetUser.id,
+    },
+  });
+
+  revalidatePath("/editor");
+  revalidatePath(`/editor/${encodeURIComponent(document.id)}`);
+}
+
 export async function removeDocumentMember(documentId: string, memberId: string) {
   const { document, role } = await requireDocumentAccess(documentId);
 
@@ -276,6 +319,57 @@ export async function listDocumentMembers(
     createdAt: member.createdAt.toISOString(),
     user: member.user,
   }));
+}
+
+export async function searchShareCandidates(
+  documentId: string,
+  query: string,
+): Promise<ShareCandidate[]> {
+  const { document } = await requireDocumentAccess(documentId);
+  const searchTerm = query.trim();
+
+  if (searchTerm.length < 2) {
+    return [];
+  }
+
+  const existingMembers = await db.documentMember.findMany({
+    where: { documentId: document.id },
+    select: { userId: true },
+  });
+
+  const excludedUserIds = [document.ownerId, ...existingMembers.map((member) => member.userId)];
+
+  const users = await db.user.findMany({
+    where: {
+      id: {
+        notIn: excludedUserIds,
+      },
+      OR: [
+        {
+          name: {
+            contains: searchTerm,
+            mode: "insensitive",
+          },
+        },
+        {
+          email: {
+            contains: searchTerm,
+            mode: "insensitive",
+          },
+        },
+      ],
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      image: true,
+    },
+    orderBy: [{ name: "asc" }, { email: "asc" }],
+    take: 8,
+  });
+
+  return users;
 }
 
 export async function checkDocumentAccess(

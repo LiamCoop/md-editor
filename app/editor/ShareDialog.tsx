@@ -1,12 +1,17 @@
 "use client";
 
 import Image from "next/image";
-import { startTransition, useState } from "react";
-import type { DocumentMemberRecord, DocumentVisibility } from "@/lib/types";
+import { startTransition, useDeferredValue, useEffect, useState } from "react";
+import type {
+  DocumentMemberRecord,
+  DocumentVisibility,
+  ShareCandidate,
+} from "@/lib/types";
 import {
-  addDocumentMember,
+  addDocumentMemberByUserId,
   listDocumentMembers,
   removeDocumentMember,
+  searchShareCandidates,
   updateDocumentVisibility,
 } from "./actions";
 import { avatarFallback } from "./utils";
@@ -26,24 +31,68 @@ export function ShareDialog({
   isOpen,
   onClose,
 }: ShareDialogProps) {
-  const [email, setEmail] = useState("");
+  const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [members, setMembers] = useState(initialMembers);
   const [visibility, setVisibility] = useState(initialVisibility);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  if (!isOpen) {
-    return null;
-  }
+  const [candidates, setCandidates] = useState<ShareCandidate[]>([]);
+  const [selectedCandidate, setSelectedCandidate] = useState<ShareCandidate | null>(null);
+  const deferredQuery = useDeferredValue(query);
+  const hasSearchQuery = deferredQuery.trim().length >= 2;
+  const visibleCandidates = hasSearchQuery ? candidates : [];
+  const activeSelectedCandidate =
+    hasSearchQuery &&
+    selectedCandidate &&
+    visibleCandidates.some((candidate) => candidate.id === selectedCandidate.id)
+      ? selectedCandidate
+      : null;
 
   const refreshMembers = async () => {
     const nextMembers = await listDocumentMembers(documentId);
     setMembers(nextMembers);
   };
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!hasSearchQuery) {
+      return;
+    }
+
+    startTransition(() => {
+      void searchShareCandidates(documentId, deferredQuery)
+        .then((results) => {
+          if (cancelled) {
+            return;
+          }
+
+          setCandidates(results);
+          setSelectedCandidate((current) =>
+            current && results.some((candidate) => candidate.id === current.id)
+              ? current
+              : results[0] ?? null,
+          );
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setCandidates([]);
+            setSelectedCandidate(null);
+          }
+        });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [deferredQuery, documentId, hasSearchQuery]);
+
+  if (!isOpen) {
+    return null;
+  }
+
   const handleAddMember = () => {
-    const nextEmail = email.trim();
-    if (!nextEmail) {
+    if (!activeSelectedCandidate) {
       return;
     }
 
@@ -51,9 +100,11 @@ export function ShareDialog({
     setError(null);
 
     startTransition(() => {
-      void addDocumentMember(documentId, nextEmail)
+      void addDocumentMemberByUserId(documentId, activeSelectedCandidate.id)
         .then(async () => {
-          setEmail("");
+          setQuery("");
+          setCandidates([]);
+          setSelectedCandidate(null);
           await refreshMembers();
         })
         .catch((reason: unknown) => {
@@ -152,26 +203,76 @@ export function ShareDialog({
 
         <div className="mt-5 rounded-lg border border-black/10 p-4">
           <label htmlFor="share-email" className="block text-sm font-semibold">
-            Add people by email
+            Add people
           </label>
           <div className="mt-3 flex gap-2">
             <input
               id="share-email"
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
               className="w-full rounded-md border border-black/15 px-3 py-2 text-sm outline-none focus:border-black/40"
-              placeholder="name@example.com"
+              placeholder="Search by name or email"
             />
             <button
               type="button"
               onClick={handleAddMember}
-              disabled={isSubmitting}
+              disabled={isSubmitting || !activeSelectedCandidate}
               className="rounded-md bg-black px-3 py-2 text-sm font-medium text-white transition hover:bg-black/85 disabled:opacity-50"
             >
               Add
             </button>
           </div>
+          {query.trim().length >= 2 ? (
+            <div className="mt-3 rounded-md border border-black/10 bg-white">
+              {visibleCandidates.length === 0 ? (
+                <p className="px-3 py-2 text-sm text-black/60">No matching people found.</p>
+              ) : (
+                visibleCandidates.map((candidate) => {
+                  const isSelected = activeSelectedCandidate?.id === candidate.id;
+
+                  return (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      onClick={() => setSelectedCandidate(candidate)}
+                      className={`flex w-full items-center gap-3 px-3 py-2 text-left transition ${
+                        isSelected ? "bg-black/5" : "hover:bg-black/[0.03]"
+                      }`}
+                    >
+                      {candidate.image ? (
+                        <Image
+                          src={candidate.image}
+                          alt={candidate.name ?? candidate.email ?? "User"}
+                          width={32}
+                          height={32}
+                          className="h-8 w-8 rounded-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black/10 text-xs font-semibold">
+                          {avatarFallback(candidate.name ?? "", candidate.email ?? "")}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">
+                          {candidate.name && candidate.email
+                            ? `${candidate.name} (${candidate.email})`
+                            : candidate.name ?? candidate.email ?? "Unknown user"}
+                        </p>
+                        {candidate.name && candidate.email ? null : (
+                          <p className="truncate text-xs text-black/60">{candidate.email}</p>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-black/60">
+              Start typing at least two characters to search signed-in users.
+            </p>
+          )}
           {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
         </div>
 
