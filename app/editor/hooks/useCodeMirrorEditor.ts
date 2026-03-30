@@ -160,9 +160,11 @@ export function useCodeMirrorEditor({
             .map((comment) => {
                 try {
                     const from = getCursorPosition(doc, ["content"], comment.anchorStartCursor);
-                    const to = getCursorPosition(doc, ["content"], comment.anchorEndCursor);
                     const clampedFrom = Math.max(0, Math.min(from, docLength));
-                    const clampedTo = Math.max(clampedFrom, Math.min(to, docLength));
+                    const rawTo = typeof comment.anchorLength === "number"
+                        ? from + comment.anchorLength
+                        : getCursorPosition(doc, ["content"], comment.anchorEndCursor);
+                    const clampedTo = Math.max(clampedFrom, Math.min(rawTo, docLength));
                     if (clampedTo <= clampedFrom) return null;
                     return {
                         from: clampedFrom,

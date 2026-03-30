@@ -44,12 +44,13 @@ export function useComments({
         }
 
         try {
-            const startCursor = getCursor(doc, ["content"], orderedSelection.start);
-            const endCursor = getCursor(doc, ["content"], orderedSelection.end);
+            const startCursor = getCursor(doc, ["content"], orderedSelection.start, "after");
+            const endCursor = getCursor(doc, ["content"], orderedSelection.end, "before");
 
             setPendingComment({
                 anchorStartCursor: startCursor,
                 anchorEndCursor: endCursor,
+                anchorLength: orderedSelection.end - orderedSelection.start,
                 selectedText,
                 body: "",
             });
@@ -64,7 +65,7 @@ export function useComments({
         }
 
         const body = pendingComment.body.trim();
-        const { anchorStartCursor, anchorEndCursor } = pendingComment;
+        const { anchorStartCursor, anchorEndCursor, anchorLength } = pendingComment;
 
         const commentId = crypto.randomUUID();
         changeActiveDoc((doc) => {
@@ -77,6 +78,7 @@ export function useComments({
                 authorName: user.name,
                 anchorStartCursor,
                 anchorEndCursor,
+                anchorLength,
                 body,
                 createdAt: Date.now(),
                 replies: [],

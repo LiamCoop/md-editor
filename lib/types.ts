@@ -14,6 +14,8 @@ export interface Comment {
   anchorStartCursor: string;
   /** Automerge cursor string for the end of the anchored range */
   anchorEndCursor: string;
+  /** Fixed original width of the anchored range */
+  anchorLength?: number;
   body: string;
   createdAt: number;
   replies: Reply[];

@@ -3,6 +3,7 @@ export type ViewMode = "edit" | "split" | "preview";
 export interface PendingComment {
     anchorStartCursor: string;
     anchorEndCursor: string;
+    anchorLength: number;
     selectedText: string;
     body: string;
 }

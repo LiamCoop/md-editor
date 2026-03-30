@@ -124,7 +124,7 @@ export function CommentSidebar({
                             )
                         }
                         className="h-16 w-full resize-none rounded-lg border border-[#1a73e8] bg-white px-3 py-2 text-sm leading-5 outline-none focus:border-[#1a73e8]"
-                        placeholder="Comment or add others with @"
+                        placeholder="Comment"
                     />
                     <div className="mt-3 flex items-center justify-end gap-2">
                         <button
