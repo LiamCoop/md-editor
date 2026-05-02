@@ -1,4 +1,24 @@
-A real-time collaborative markdown editor built for teams — think Google Docs meets GitHub review workflows, but for markdown. Multiple users can write and edit simultaneously with full conflict-free merging, see each other's cursors and selections live, and leave threaded comments anchored to specific text passages. Authenticates via Microsoft or Google accounts and works in any browser.
+A real-time collaborative markdown editor built for teams. Think Google Docs collaboration, specifically for markdown. Multiple users can write and edit simultaneously with full conflict-free merging, see each other's cursors and selections live, and leave threaded comments anchored to specific text passages. Authenticates via Microsoft or Google accounts and works in any browser.
+
+## Deploy on Railway
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/TEMPLATE_ID)
+
+One-click deploy provisions three services: the Next.js app, a PostgreSQL database, and an Automerge sync server. You'll need OAuth credentials from at least one provider (Microsoft Entra ID or Google) — see [Authentication Setup](#authentication-setup) below.
+
+**Required environment variables to set after deploying:**
+
+| Variable                 | Description                                                       |
+| ------------------------ | ----------------------------------------------------------------- |
+| `NEXTAUTH_SECRET`        | Random secret — generate with `openssl rand -base64 32`           |
+| `NEXTAUTH_URL`           | Your Railway app's public URL                                     |
+| `AZURE_AD_CLIENT_ID`     | Azure app registration client ID _(if using Microsoft login)_     |
+| `AZURE_AD_CLIENT_SECRET` | Azure app registration client secret _(if using Microsoft login)_ |
+| `AZURE_AD_TENANT_ID`     | Azure tenant ID _(if using Microsoft login)_                      |
+| `GOOGLE_CLIENT_ID`       | Google OAuth client ID _(if using Google login)_                  |
+| `GOOGLE_CLIENT_SECRET`   | Google OAuth client secret _(if using Google login)_              |
+
+`DATABASE_URL` and `NEXT_PUBLIC_SYNC_SERVER_URL` are wired automatically between services.
 
 ## Features
 
