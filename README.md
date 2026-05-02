@@ -2,7 +2,7 @@ A real-time collaborative markdown editor built for teams. Think Google Docs col
 
 ## Deploy on Railway
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/TEMPLATE_ID)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/AWzIAT?referralCode=Y174gS&utm_medium=integration&utm_source=template&utm_campaign=generic)
 
 One-click deploy provisions three services: the Next.js app, a PostgreSQL database, and an Automerge sync server. You'll need OAuth credentials from at least one provider (Microsoft Entra ID or Google) — see [Authentication Setup](#authentication-setup) below.
 
