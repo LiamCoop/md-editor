@@ -30,6 +30,12 @@ One-click deploy provisions three services: the Next.js app, a PostgreSQL databa
 - **SSO authentication** — sign in with Microsoft Entra ID or Google via NextAuth
 - **Offline-friendly** — IndexedDB storage persists local edits and syncs on reconnect; BroadcastChannel enables tab-to-tab sync without a server round-trip
 
+## Screenshots
+
+| Editor | Collaboration | Document Demo |
+| --- | --- | --- |
+| ![Editor screenshot](images/editor.png) | ![Collaboration screenshot](images/collaborate.png) | ![Document demo screenshot](images/doc-demo.png) |
+
 ## Authentication Setup
 
 Copy [`.env.example`](/Users/lco/personal/md-editor/.env.example) to `.env` and fill in the credentials for the providers you want to enable.
